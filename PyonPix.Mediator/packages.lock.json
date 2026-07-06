@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "Google.FlatBuffers": {
+        "type": "Transitive",
+        "resolved": "25.2.10",
+        "contentHash": "z3ykbSRsy6oqMzeZ84a+K8rnMJ/ysVikar8r2yUhHz0HSxIjBpj53mZvpu6LjLEm5fLLWQsCdelJwL1nu7lloA=="
+      },
+      "pyonpix.shared": {
+        "type": "Project",
+        "dependencies": {
+          "Google.FlatBuffers": "[25.2.10, )"
+        }
+      }
+    }
+  }
+}

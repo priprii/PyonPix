@@ -1,0 +1,216 @@
+﻿namespace PyonPix.Ipc;
+
+enum LogType : byte {
+	Verbose,
+	Info,
+	Warn,
+	Error
+}
+table Log {
+	type: LogType = Info;
+	message: string;
+}
+
+enum CommandType : byte {
+	MediatorInitializeRequest,
+	MediatorInitializeSuccess,
+	BrowserInitializeRequest,
+	BrowserInitializeSuccess,
+	BrowserInitializeFailed,
+	BrowserHeartbeat,
+	BrowserShutdown,
+	BrowserLostFocus
+}
+table Command {
+	type: CommandType;
+}
+
+table InitializeBrowser {
+	pluginPath: string;
+	gamePid: uint;
+	LuidLowPart: uint;
+    LuidHighPart: int;
+}
+
+enum StateType : byte {
+	Success,
+	Failed,
+	TabDestroyed
+}
+table HostInitializeState {
+	type: StateType;
+	message: string;
+}
+table TabInitializeState {
+	type: StateType;
+	pixId: string;
+	message: string;
+}
+
+table CreateTab {
+	pixId: string;
+	gpuAcceleration: bool;
+	x: int;
+	y: int;
+	w: uint;
+	h: uint;
+	syncCookies: bool;
+	extensions: [string];
+}
+
+table DestroyTab {
+	pixId: string;
+}
+
+table UpdateFrame {
+	pixId: string;
+	sharedTexture: long;
+	w: uint;
+	h: uint;
+}
+
+table CursorChanged {
+	cursorId: uint;
+}
+
+table NavigationStarting {
+	pixId: string;
+	uri: string;
+	userInitiated: bool;
+}
+
+table HistoryChanged {
+	pixId: string;
+	uri: string;
+}
+
+table TitleChanged {
+	pixId: string;
+	title: string;
+}
+
+table NavigationCompleted {
+	pixId: string;
+	statusCode: uint;
+}
+
+table NavigationCanceled {
+	pixId: string;
+}
+
+table FavIconChanged {
+	pixId: string;
+	data: [ubyte];
+}
+
+enum ExtensionOp : byte {
+	Install,
+	Remove,
+	Enable,
+	Disable
+}
+table ExtensionOperation {
+	extensionOp: ExtensionOp;
+	extensionId: string;
+}
+
+table Navigate {
+	pixId: string;
+	uri: string;
+}
+table Reload {
+	pixId: string;
+}
+table StopNavigation {
+	pixId: string;
+}
+
+table Resize {
+	pixId: string;
+	x: int;
+	y: int;
+	w: uint;
+	h: uint;
+}
+table Reposition {
+	pixId: string;
+	x: int;
+	y: int;
+}
+
+table SetFocusedTab {
+	pixId: string;
+	byUserInput: bool;
+}
+
+table SendMouseEvent {
+	pixId: string;
+	msg: uint;
+	wParam: long;
+	lParam: long;
+}
+
+table UpdateSpatialAudio {
+	pixId: string;
+	left: float;
+	right: float;
+}
+
+table OpenDevTools {
+	pixId: string;
+}
+
+table InstallExtension {
+	extensionId: string;
+	extensionName: string;
+}
+table UninstallExtension {
+	extensionId: string;
+	extensionName: string;
+}
+table EnableExtension {
+	extensionId: string;
+	extensionName: string;
+}
+table DisableExtension {
+	extensionId: string;
+	extensionName: string;
+}
+
+union MessagePayload {
+	Command,
+	Log,
+	InitializeBrowser,
+	HostInitializeState,
+	TabInitializeState,
+	CreateTab,
+	DestroyTab,
+	UpdateFrame,
+	CursorChanged,
+	NavigationStarting,
+	HistoryChanged,
+	TitleChanged,
+	NavigationCompleted,
+	NavigationCanceled,
+	FavIconChanged,
+	ExtensionOperation,
+	Navigate,
+	Reload,
+	StopNavigation,
+	Resize,
+	Reposition,
+	SetFocusedTab,
+	SendMouseEvent,
+	UpdateSpatialAudio,
+	OpenDevTools,
+	InstallExtension,
+	UninstallExtension,
+	EnableExtension,
+	DisableExtension
+}
+
+table IpcMessage {
+	payload: MessagePayload;
+}
+
+root_type IpcMessage;

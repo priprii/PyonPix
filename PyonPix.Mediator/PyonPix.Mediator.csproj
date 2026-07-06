@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<Authors>Pyon</Authors>
+		<Version>1.0.0.0</Version>
+		<Platforms>x64</Platforms>
+		<TargetFramework>net10.0-windows</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<OutputType>Exe</OutputType>
+		<OutputPath>$(SolutionDir)PyonPix\bin\$(Platform)\$(Configuration)\</OutputPath>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+		<StartupObject>PyonPix.Mediator.Program</StartupObject>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\PyonPix.Shared\PyonPix.Shared.csproj" />
+	</ItemGroup>
+
+	<PropertyGroup>
+		<DalamudLibPath Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(appdata)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
+		<DalamudLibPath Condition="$([MSBuild]::IsOSPlatform('Linux'))">$(HOME)/.xlcore/dalamud/Hooks/dev/</DalamudLibPath>
+	</PropertyGroup>
+</Project>

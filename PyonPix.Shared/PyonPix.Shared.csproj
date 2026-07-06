@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<Authors>Pyon</Authors>
+		<Version>1.0.0.0</Version>
+		<Platforms>x64</Platforms>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<NoWarn>CA1416</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Google.FlatBuffers" Version="25.2.10" />
+	</ItemGroup>
+
+	<Target Name="GenerateFlatBuffers" BeforeTargets="BeforeBuild">
+		<Exec Command="&quot;$(SolutionDir)tools\flatc.exe&quot; --csharp -o &quot;$(ProjectDir)Ipc\Generated&quot; &quot;$(ProjectDir)Ipc\IpcMessage.fbs&quot;" />
+	</Target>
+</Project>

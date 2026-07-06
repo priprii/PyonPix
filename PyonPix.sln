@@ -1,0 +1,49 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.3.11408.92
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyonPix", "PyonPix\PyonPix.csproj", "{60D2AED1-A905-4465-9917-F2B2EB0DED24}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "PyonPix.Browser", "PyonPix.Browser\PyonPix.Browser.vcxproj", "{7BE801CD-865C-4656-98F4-969F59100F5B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyonPix.Mediator", "PyonPix.Mediator\PyonPix.Mediator.csproj", "{AE1DFA34-9165-4354-BDC4-2DDE033269AB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyonPix.Shared", "PyonPix.Shared\PyonPix.Shared.csproj", "{ED351C2B-AE86-40A1-826A-4354F59EE502}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyonPix.Server", "PyonPix.Server\PyonPix.Server.csproj", "{6524F70D-1D8A-5C57-665E-7CF912966244}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{60D2AED1-A905-4465-9917-F2B2EB0DED24}.Debug|x64.ActiveCfg = Debug|x64
+		{60D2AED1-A905-4465-9917-F2B2EB0DED24}.Debug|x64.Build.0 = Debug|x64
+		{60D2AED1-A905-4465-9917-F2B2EB0DED24}.Release|x64.ActiveCfg = Release|x64
+		{60D2AED1-A905-4465-9917-F2B2EB0DED24}.Release|x64.Build.0 = Release|x64
+		{7BE801CD-865C-4656-98F4-969F59100F5B}.Debug|x64.ActiveCfg = Debug|x64
+		{7BE801CD-865C-4656-98F4-969F59100F5B}.Debug|x64.Build.0 = Debug|x64
+		{7BE801CD-865C-4656-98F4-969F59100F5B}.Release|x64.ActiveCfg = Release|x64
+		{7BE801CD-865C-4656-98F4-969F59100F5B}.Release|x64.Build.0 = Release|x64
+		{AE1DFA34-9165-4354-BDC4-2DDE033269AB}.Debug|x64.ActiveCfg = Debug|x64
+		{AE1DFA34-9165-4354-BDC4-2DDE033269AB}.Debug|x64.Build.0 = Debug|x64
+		{AE1DFA34-9165-4354-BDC4-2DDE033269AB}.Release|x64.ActiveCfg = Release|x64
+		{AE1DFA34-9165-4354-BDC4-2DDE033269AB}.Release|x64.Build.0 = Release|x64
+		{ED351C2B-AE86-40A1-826A-4354F59EE502}.Debug|x64.ActiveCfg = Debug|x64
+		{ED351C2B-AE86-40A1-826A-4354F59EE502}.Debug|x64.Build.0 = Debug|x64
+		{ED351C2B-AE86-40A1-826A-4354F59EE502}.Release|x64.ActiveCfg = Release|x64
+		{ED351C2B-AE86-40A1-826A-4354F59EE502}.Release|x64.Build.0 = Release|x64
+		{6524F70D-1D8A-5C57-665E-7CF912966244}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6524F70D-1D8A-5C57-665E-7CF912966244}.Debug|x64.Build.0 = Debug|Any CPU
+		{6524F70D-1D8A-5C57-665E-7CF912966244}.Release|x64.ActiveCfg = Release|Any CPU
+		{6524F70D-1D8A-5C57-665E-7CF912966244}.Release|x64.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B17E85B1-5F60-4440-9F9A-3DDE877E8CDF}
+	EndGlobalSection
+EndGlobal
