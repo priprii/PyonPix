@@ -175,7 +175,6 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
             case PixUpdateType.SyncProperties: update = new SyncedPixUpdateSyncProperties(syncedPix.Id, syncedPix.Sync.ToSynced()); break;
             default: update = new SyncedPixUpdate(syncedPix.Id, syncedPix.Info.ToSynced(), syncedPix.Browser.ToSynced(), syncedPix.Renderer.ToSynced(), syncedPix.Light.ToSynced(), syncedPix.Audio.ToSynced(), syncedPix.Sync.ToSynced()); break;
         }
-
         if(update == null) return;
         _ = SendAsync(MessageType.SyncedPixUpdate, update);
     }
@@ -183,6 +182,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
     public void Update() {
         if(Client.AuthExpiration != null && Client.AuthExpirationTime!.Value.TotalSeconds <= 0) {
             Client.AuthExpiration = null;
+            Services.Log.Warning($"[SyncService] AuthKey Expired, Disconnecting.. ({StateService.LocalPlayerContentId})");
             Disconnect();
         }
     }
@@ -199,6 +199,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
         ConnectionCts?.Dispose();
         ConnectionCts = new CancellationTokenSource();
 
+        Services.Log.Verbose($"[SyncService] Connecting..");
         SetState(ConnectionState.Connecting, "Connecting..", StatusType.None);
         ConnectionLock.Release();
 
@@ -214,30 +215,34 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
                 ReceiveLoopTask = Task.Run(() => ReceiveLoopAsync(ConnectionCts.Token));
 
                 await SendAsync(MessageType.AuthRequest, new AuthRequestDto(Plugin.Version, StateService.LocalPlayerContentId, Config.Sync.SecretKey, StateService.CurrentTerritory?.ToDto() ?? new()));
+                Services.Log.Verbose($"[SyncService] Connected ({attempt}:{StateService.LocalPlayerContentId})");
                 SetState(ConnectionState.Connected, "Connected", StatusType.Hide);
                 ConnectionLock.Release();
                 return;
             } catch(OperationCanceledException) {
+                Services.Log.Verbose($"[SyncService] Connection Aborted ({attempt}:{StateService.LocalPlayerContentId})");
                 SetState(ConnectionState.Disconnected, "Connection Aborted", StatusType.Warn);
                 return;
             } catch(Exception ex) when(attempt < MaxConnectionAttempts) {
-                Services.Log.Verbose($"[SyncService] Connection Failed (Retry {attempt}): {ex.Message}");
+                Services.Log.Warning($"[SyncService] Connection Failed ({attempt}:{StateService.LocalPlayerContentId}): {ex.Message}");
                 StatusMessage = "Reconnecting..";
                 try {
                     var delay = Math.Min(60000, 2000 * attempt) + RNG.Next(0, 500);
                     await Task.Delay(delay, ConnectionCts.Token);
                 } catch(OperationCanceledException) {
+                    Services.Log.Verbose($"[SyncService] Connection Aborted ({attempt}:{StateService.LocalPlayerContentId})");
                     SetState(ConnectionState.Disconnected, "Connection Aborted", StatusType.Warn);
                     return;
                 }
             } catch(Exception ex) {
-                Services.Log.Error($"[SyncService] Connection Failed: {ex}");
+                Services.Log.Error($"[SyncService] Connection Failed ({attempt}:{StateService.LocalPlayerContentId}): {ex}");
                 SetState(ConnectionState.Disconnected, "Connection Failed", StatusType.Error);
                 StatusMessage = "Connection Failed";
                 return;
             }
         }
 
+        Services.Log.Warning($"[SyncService] Connection Attempts Exceeded ({StateService.LocalPlayerContentId})");
         SetState(ConnectionState.Disconnected, "Connection Attempts Exceeded", StatusType.Error);
     }
 
@@ -274,6 +279,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
                             Services.Log.Warning($"[SyncService] {result.CloseStatusDescription}");
                             SetState(ConnectionState.Disconnected, $"{result.CloseStatusDescription}", StatusType.Error);
                             if(result.CloseStatusDescription == "Heartbeat Timeout") {
+                                Services.Log.Warning($"[SyncService] Server Disconnected [Heartbeat Timeout], Reconnecting..");
                                 StatusMessage = "Reconnecting..";
                                 Connect();
                             } else {
@@ -510,7 +516,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
             SetState(ConnectionState.Disconnected, $"Error: Check /xllog for details", StatusType.Error);
         } finally {
             if(State != ConnectionState.Disconnected) {
-                Services.Log.Warning($"[SyncService] Server Disconnected, Reconnecting..");
+                Services.Log.Warning($"[SyncService] Server Disconnected [Connection Closed], Reconnecting..");
                 SetState(ConnectionState.Disconnected, "Server Disconnected, Reconnecting..", StatusType.Warn);
                 StatusMessage = "Reconnecting..";
                 Connect();

@@ -81,6 +81,14 @@ public class UpdatesWindow : BaseWindow {
     }
 
     private void DrawChangelog() {
+        if(BeginContainer($"v1.1.0.1 - 2026.07.06", true)) {
+            AddHeader("Sync Service");
+            AddEntry("Tiny update to fix uri changes not syncing = w=");
+            AddEntry("Also added a little bit of logging to debug connection issues maybe.");
+
+            EndContainer();
+        }
+
         if(BeginContainer($"v1.1.0.0 - 2026.07.06", true)) {
             AddHeader("Sync Service");
             AddEntry("Sync Service is now available, the connection toggle button can be found in the main PyonPix window. Connection to the service is automatic upon character login until manually disconnecting from the service.");

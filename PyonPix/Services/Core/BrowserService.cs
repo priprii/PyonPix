@@ -91,9 +91,8 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
     }
     private void OnPixUpdated(PixUpdate u) {
         if(u.Pix == null || !PixService.IsSpawned(u.Pix)) return;
-        if(u.Type is not (PixUpdateType.Uri or PixUpdateType.All or PixUpdateType.AudioProperties)) return;
+        if(u.Type is not (PixUpdateType.Uri or PixUpdateType.BrowserProperties or PixUpdateType.All or PixUpdateType.AudioProperties)) return;
         if(!Tabs.TryGetValue(u.Pix.Id, out var _)) return;
-
         if(u.Type == PixUpdateType.AudioProperties) {
             if(State == BrowserState.Running)
                 Ipc.SendUpdateSpatialAudio(u.Pix.Id, 1f, 1f);
