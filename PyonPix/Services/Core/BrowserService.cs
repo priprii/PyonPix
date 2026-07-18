@@ -4,14 +4,17 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using PyonPix.Config;
+using PyonPix.Config.Pix;
 using PyonPix.Events;
 using PyonPix.Ipc;
 using PyonPix.Services.Game;
 using PyonPix.Shared.Ipc;
 using PyonPix.Shared.Structs.Browser;
+using PyonPix.Shared.Structs.Browser.WebMessages;
 using PyonPix.Shared.Structs.Pix;
 using PyonPix.Structs.Audio;
 using PyonPix.Structs.Browser;
@@ -27,6 +30,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
     private StateService StateService => Services.Get<StateService>();
     private ExtensionsService ExtensionsService => Services.Get<ExtensionsService>();
     private DataService DataService => Services.Get<DataService>();
+    private SyncService SyncService => Services.Get<SyncService>();
 
     private Process? MediatorProcess;
     private MemoryMappedIpc Ipc = null!;
@@ -78,7 +82,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
 
         EnsureTabForPix(p);
         if(FocusedTab == null) {
-            SetFocusedTab(p.Id, false);
+            SetFocus(p.Id, false);
         }
 
         var onEnter = Config.Global.Browser.TerritorySpawnBehaviour;
@@ -91,14 +95,25 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
     }
     private void OnPixUpdated(PixUpdate u) {
         if(u.Pix == null || !PixService.IsSpawned(u.Pix)) return;
-        if(u.Type is not (PixUpdateType.Uri or PixUpdateType.BrowserProperties or PixUpdateType.All or PixUpdateType.AudioProperties)) return;
-        if(!Tabs.TryGetValue(u.Pix.Id, out var _)) return;
-        if(u.Type == PixUpdateType.AudioProperties) {
-            if(State == BrowserState.Running)
-                Ipc.SendUpdateSpatialAudio(u.Pix.Id, 1f, 1f);
-        } else {
+        if(u.Type is not (PixUpdateType.All or PixUpdateType.Uri or PixUpdateType.BrowserProperties or PixUpdateType.MediaState or PixUpdateType.AudioProperties)) return;
+        if(!Tabs.TryGetValue(u.Pix.Id, out var tab)) return;
+
+        if(u.Type is (PixUpdateType.All or PixUpdateType.Uri)) {
+            if(!u.PerformLocalUpdate) return;
             DataService.CancelPendingRemoval(u.Pix.Id);
             NavigateForPix(u.Pix);
+            return;
+        }
+
+        if(State != BrowserState.Running) return;
+
+        if(u.Origin == PixUpdateOrigin.Remote && u.Type is PixUpdateType.MediaState && u.Pix is SyncedPix sPix && sPix.Media != null) {
+            Services.Log.Verbose($"[BrowserService] OnPixUpdated MediaState applying to {u.Pix.Id}: {sPix.Media.IsPlaying},({sPix.Media.Action}),{sPix.Media.SeekTime}");
+            Ipc.SendUpdateMediaState(u.Pix.Id, sPix.Media.Action, sPix.Media.IsPlaying, sPix.Media.SeekTime, sPix.Media.Duration, sPix.Media.Timestamp);
+        }
+
+        if(u.Type is (PixUpdateType.All or PixUpdateType.AudioProperties)) {
+            Ipc.SendUpdateSpatialAudio(u.Pix.Id, 1f, 1f);
         }
     }
     private void OnPixDespawned(IPix? p, bool isUserAction) {
@@ -206,7 +221,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
                     Services.Log.Warning($"[Browser:{e.PixId}] Unknown Tab Initialized");
                     return;
                 }
-                Services.Log.Verbose($"[Browser:{e.PixId}] Initialized");
+                Services.Log.Info($"[Browser:{e.PixId}] Initialized");
 
                 t.State = TabState.Ready;
 
@@ -248,17 +263,19 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
             if(!Tabs.TryGetValue(e.PixId, out var t)) return;
             OnStatusUpdate?.Invoke(new($"Navigating to {e.Uri}"));
             t.NavState = NavigationState.Started;
-            t.PendingUri = e.Uri;
+            t.PendingUri = BrowserUtil.NormalizeUriForSync(e.Uri);
         };
 
         Ipc.OnHistoryChanged += (e) => {
+            var uri = BrowserUtil.NormalizeUriForSync(e.Uri);
             if(!Tabs.TryGetValue(e.PixId, out var t)) return;
+            var hasPending = t.PendingUri != null;
             if(t.PendingUri != null && t.PendingUri.StartsWith("data:text/html;")) {
                 t.NavState = NavigationState.Ready;
                 t.PendingUri = null;
                 return; // No history update on error response injection
             }
-            var uri = e.Uri;
+
             if(uri == "about:blank") {
                 if(t.PendingUri == null || !t.PendingUri.StartsWith("pix://")) return;
                 uri = t.PendingUri;
@@ -274,8 +291,10 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
             if(t.CurrentNavigationItem?.Uri == uri) return; // No history update on page reload
 
             if(PixService.SpawnedPixs.TryGetValue(e.PixId, out var p)) {
-                p.Browser.Uri = uri;
-                PixService.UpdateUri(p, true);
+                //if(p.Browser.Uri != uri) {
+                    p.Browser.Uri = uri;
+                    PixService.UpdateUri(p, performLocalUpdate: false);
+                //}
             }
 
             if(t.CurrentNavigationItem != null && Uri.TryCreate(uri, UriKind.Absolute, out var absolute) && !string.IsNullOrWhiteSpace(absolute.Fragment)) {
@@ -329,6 +348,59 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
                 t.FavIcon = newTex;
                 old?.Dispose();
             });
+        };
+
+        Ipc.OnWebMessageReceived += (e) => {
+            if(!Tabs.TryGetValue(e.PixId, out var t)) return;
+            if(!PixService.SpawnedPixs.TryGetValue(e.PixId, out var p)) return;
+            if(p is not SyncedPix sPix) return;
+
+            var message = JsonSerializer.Deserialize<WebMessage>(e.Json);
+            if(message == null) return;
+            switch(message.Type) {
+                case WebMessageType.MediaState: {
+                        var media = message.Payload.Deserialize<MediaState>();
+                        if(media == null) return;
+
+                        if(!sPix.CanSyncEdit) {
+                            Services.Log.Verbose($"[BrowserService] WebMessage MediaState: Client Resync");
+                            SyncService.SyncMediaState(e.PixId, media);
+                            return;
+                        }
+                        
+                        sPix.Media = media;
+                        Services.Log.Verbose($"[BrowserService] WebMessage MediaState: {e.Json}");
+                        PixService.UpdateMediaState(sPix);
+                        break;
+                    }
+                case WebMessageType.MediaReady: {
+                        Services.Log.Verbose($"[BrowserService] WebMessage MediaReady: {e.Json}");
+
+                        var media = message.Payload.Deserialize<MediaState>();
+                        if(media == null) return;
+
+                        SyncService.SyncMediaState(e.PixId, media);
+                        break;
+                    }
+                case WebMessageType.MediaResync: {
+                        Services.Log.Verbose($"[BrowserService] WebMessage MediaResync: {e.Json}");
+
+                        var media = message.Payload.Deserialize<MediaState>();
+                        if(media == null) return;
+
+                        SyncService.SyncMediaState(e.PixId, media);
+                        break;
+                    }
+                case WebMessageType.Navigate: {
+                        Services.Log.Verbose($"[BrowserService] WebMessage Navigate: {e.Json}");
+
+                        var nav = message.Payload.Deserialize<Shared.Structs.Browser.WebMessages.Navigate>();
+                        if(nav == null) return;
+                        if(!sPix.CanSyncEdit) return;
+                        Navigate(nav.Uri);
+                        break;
+                    }
+            }
         };
 
         Ipc.OnExtensionOperation += (e) => {
@@ -387,26 +459,40 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
     }
 
     public bool Draw(Vector2 imguiPos, Vector2 imguiSize) {
-        if(!UpdateLayout(imguiPos, imguiSize)) return false;
-        if(imguiSize.X < 1 || imguiSize.Y < 1) return false;
+        UpdateLayout(imguiPos, imguiSize);
 
-        PresentationPosition = imguiPos;
-        PresentationSize = imguiSize;
-
+        if(!TrySetPresentationBounds(imguiPos, imguiSize))
+            return false;
         if(State != BrowserState.Running || FocusedTab?.SRV == null)
             return false;
 
-        ImGui.Image(new ImTextureID(FocusedTab.SRV.NativePointer), PresentationSize);
+        ImGui.Image(new ImTextureID(FocusedTab.SRV.NativePointer), imguiSize);
         return true;
     }
 
-    public bool UpdateLayout(Vector2 imguiPos, Vector2 imguiSize) {
-        if(State != BrowserState.Running) return true;
-        if(FocusedTab?.SRV == null) return true;
+    public bool TrySetPresentationBounds(Vector2 pos, Vector2 size) {
+        if(size.X < 1 || size.Y < 1) return false;
+        PresentationPosition = pos;
+        PresentationSize = size;
+        return true;
+    }
+
+    public void DetermineResizeState(bool sizeChanged, bool mouseDragging) {
+        if(!IsResizing && sizeChanged && mouseDragging) {
+            IsResizing = true;
+        }
+        if(IsResizing && !mouseDragging) {
+            IsResizing = false;
+        }
+    }
+
+    public void UpdateLayout(Vector2 imguiPos, Vector2 imguiSize) {
+        if(State != BrowserState.Running) return;
+        if(FocusedTab?.SRV == null) return;
 
         // todo: This causes stretch on resize but it prevents crash caused by input racing
         // Need to separate message posting in render loop instead of sleeping on it
-        if(IsResizing || IsRescaling) return true;
+        if(IsResizing || IsRescaling) return;
 
         foreach(var p in PixService.SpawnedPixs.Values) {
             if(!Tabs.TryGetValue(p.Id, out var t)) continue;
@@ -424,19 +510,33 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
                 Ipc.SendReposition(p.Id, (int)t.RenderPos.X, (int)t.RenderPos.Y);
             }
         }
-
-        return true;
     }
+
+    public bool TryGetRenderBounds(IPix pix, out Vector2 pos, out Vector2 size) {
+        pos = default;
+        size = default;
+
+        if(!Tabs.TryGetValue(pix.Id, out var tab))
+            return false;
+        if(tab.State != TabState.Ready)
+            return false;
+
+        (pos, size) = GetRenderBounds(pix);
+
+        return size.X > 0 && size.Y > 0;
+    }
+
     private (Vector2, Vector2) GetRenderBounds(IPix p, Vector2 defPos = default, Vector2 defSize = default) {
         var gameRes = UiUtil.GameResolution;
 
         if(defSize == default) {
-            if(PresentationSize.X <= 1 || PresentationSize.Y <= 1) {
+            var browserSize = PresentationSize;
+            if(browserSize.X <= 1 || browserSize.Y <= 1) {
                 defPos = Vector2.Zero;
                 defSize = gameRes;
             } else {
                 defPos = PresentationPosition;
-                defSize = PresentationSize;
+                defSize = browserSize;
             }
         }
 
@@ -466,18 +566,6 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
                 break;
         }
         return (renderPos, renderSize);
-    }
-    public Vector2 TranslatePositionRelative(IPix p, Vector2 mousePos) {
-        switch(p.Browser.ScaleMode) {
-            case BrowserScaleMode.GameWindow:
-                mousePos *= new Vector2(UiUtil.GameWidth / PresentationSize.X, UiUtil.GameHeight / PresentationSize.Y);
-                return mousePos;
-            case BrowserScaleMode.CustomScale:
-                mousePos *= new Vector2(p.Browser.CustomScale.X / PresentationSize.X, p.Browser.CustomScale.Y / PresentationSize.Y);
-                return mousePos;
-            default:
-                return mousePos;
-        }
     }
 
     private void UpdateFrame(string tabId, nint sharedHandle, uint width, uint height) {
@@ -621,29 +709,36 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         FocusedTab?.SharedHandle = nint.Zero;
     }
 
-    public void SetFocusedTab(string? pixId, bool byUserInput) {
-        if(string.IsNullOrEmpty(pixId)) {
-            ReleaseFocusedSRV();
-            FocusedTab = null;
-            PresentationUri = string.Empty;
-            return;
-        }
-        
+    public bool FocusTab(string pixId, bool byUserInput = true) {
+        if(State != BrowserState.Running) return false;
+        if(!Tabs.TryGetValue(pixId, out var tab)) return false;
+
+        if(FocusedTab?.PixId != pixId)
+            SetFocus(pixId, byUserInput);
+
+        return true;
+    }
+    private void SetFocus(string pixId, bool byUserInput = true) {
         PixService.SpawnedPixs.TryGetValue(pixId, out var p);
-        if(!Tabs.TryGetValue(pixId, out var t)) {
+        if(!Tabs.TryGetValue(pixId, out var tab)) {
             if(p == null) return;
-            t = EnsureTabForPix(p);
+            tab = EnsureTabForPix(p);
         }
 
-        PresentationUri = t.PresentationUri ?? p?.Browser.Uri ?? string.Empty;
-        FocusedTab = t;
+        PresentationUri = tab.PresentationUri ?? p?.Browser.Uri ?? string.Empty;
+        FocusedTab = tab;
         Ipc.SendSetFocusedTab(pixId, byUserInput);
 
-        if(t.SRV != null) {
-            SwapFocusedSRV(t.SRV, t.SharedHandle);
+        if(tab.SRV != null) {
+            SwapFocusedSRV(tab.SRV, tab.SharedHandle);
         } else {
             ReleaseFocusedSRV();
         }
+    }
+    private void ClearFocus() {
+        ReleaseFocusedSRV();
+        FocusedTab = null;
+        PresentationUri = string.Empty;
     }
 
     public void LostFocus() {
@@ -656,7 +751,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         if(!PixService.SpawnedPixs.TryGetValue(FocusedTab!.PixId, out var p)) return;
         p.Browser.Uri = uri;
         FocusedTab.NavState = NavigationState.Starting;
-        PixService.UpdateUri(p, false);
+        PixService.UpdateUri(p);
     }
     public void NavHome() {
         if(!CanNavigate) return;
@@ -669,7 +764,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         FocusedTab.CurrentNavigationIndex--;
         p.Browser.Uri = FocusedTab.CurrentNavigationItem!.Uri;
         FocusedTab.NavState = NavigationState.Starting;
-        PixService.UpdateUri(p, false);
+        PixService.UpdateUri(p);
     }
     public void NavHistory(int index) {
         if(!CanGoBack && !CanGoForward) return;
@@ -677,7 +772,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         FocusedTab.CurrentNavigationIndex = index;
         p.Browser.Uri = FocusedTab.CurrentNavigationItem!.Uri;
         FocusedTab.NavState = NavigationState.Starting;
-        PixService.UpdateUri(p, false);
+        PixService.UpdateUri(p);
     }
     public void NavForward() {
         if(!CanGoForward) return;
@@ -685,7 +780,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         FocusedTab.CurrentNavigationIndex++;
         p.Browser.Uri = FocusedTab.CurrentNavigationItem!.Uri;
         FocusedTab.NavState = NavigationState.Starting;
-        PixService.UpdateUri(p, false);
+        PixService.UpdateUri(p);
     }
 
     public void NavReload() {
@@ -701,11 +796,29 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         Ipc.SendStopNavigation(FocusedTab.PixId);
     }
 
+    public void SendMouseEvent(IPix pix, uint msg, nint wParam, nint lParam) => SendMouseEvent(pix.Id, msg, wParam, lParam);
     public void SendMouseEvent(string pixId, uint msg, nint wParam, nint lParam) {
         if(State != BrowserState.Running) return;
         if(!Tabs.TryGetValue(pixId, out var t)) return;
+        if(FocusedTab?.PixId != pixId) return;
         if(t.State != TabState.Ready) return;
         Ipc.SendSendMouseEvent(pixId, msg, wParam, lParam);
+    }
+
+    public void ToggleTheatreMode() {
+        if(!CanNavigate) return;
+        if(!PixService.SpawnedPixs.TryGetValue(FocusedTab!.PixId, out var p)) return;
+        if(State != BrowserState.Running) return;
+        if(FocusedTab.State != TabState.Ready) return;
+        Ipc.SendToggleTheatreMode(FocusedTab.PixId);
+    }
+    public void ToggleTheatreMode(string pixId) {
+        if(!CanNavigate) return;
+        if(!PixService.SpawnedPixs.TryGetValue(pixId, out var p)) return;
+        if(State != BrowserState.Running) return;
+        if(!Tabs.TryGetValue(pixId, out var t)) return;
+        if(t.State != TabState.Ready) return;
+        Ipc.SendToggleTheatreMode(pixId);
     }
 
     public void OpenDevTools() {
@@ -766,7 +879,7 @@ public class BrowserService(Configuration config, IServiceContext services) : Ba
         var pixId = t.PixId;
 
         if(FocusedTab?.PixId == pixId)
-            SetFocusedTab(null, false);
+            ClearFocus();
 
         Ipc.SendDestroyTab(t.PixId);
         t.Dispose();

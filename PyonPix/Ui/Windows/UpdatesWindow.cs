@@ -81,7 +81,41 @@ public class UpdatesWindow : BaseWindow {
     }
 
     private void DrawChangelog() {
-        if(BeginContainer($"v1.1.0.1 - 2026.07.06", true)) {
+        if(BeginContainer($"v1.2.0.0 - 2026.07.18", true)) {
+            AddHeader("Sync Service");
+            AddEntry("Implemented means of syncing the media state (play/pause/seek) of non-streaming media content for those who prefer not having to use web services like watchparty.");
+            AddSubEntry("Media state syncing is session based with no override.");
+            AddSubEntry("Only extensively tested with Youtube, other websites may require specific handling.");
+            AddNotice("Ads will likely cause desync, recommended to install ublock origin from the Extensions window.");
+            AddNotice("If desynced, you can resync via button in browser toolbar & in the media controls.");
+            AddNotice("You must have editing permissions of a synced pix in order to send sync updates to other viewers.");
+
+            AddHeader("Browser/Renderer");
+            AddEntry("Implemented automatic fullscreen of video content.");
+            AddNotice("Can be toggled with keybind Ctrl+F, via button in browser toolbar & in the media controls.");
+
+            AddEntry("Implemented interaction functionality with pix screens, so you no longer need to keep the browser window open.");
+            AddNotice("Clicking on a screen will lock your key input to that screen, you can restore key input back to game by clicking outside the screen region.");
+            AddNotice("Keybind Ctrl+E will display a uri input box for navigation.");
+
+            AddHeader("General");
+            AddEntry("Implemented static alias/pix styling which you can access from the little icon next to your alias in the main /pix window.");
+            AddNotice("Animated styling is exclusive to supporters.");
+
+            AddEntry("Increased synced pix max idle session time to 1 hour so media state can be retained while no viewers are present.");
+            AddEntry("Fixed issue where certain navigation behaviours were not syncing correctly.");
+            AddEntry("Fixed browser issues relating to navigation requests failing.");
+            AddEntry("Removed disabled state of Pix spawn toggle button to address cases where the browser may hang & require respawning.");
+            AddEntry("Removed function for transfering ownership of a synced pix, will be re-implemented in a later update when I get around to fixing it.");
+            AddEntry("Various server side fixes & adjustments to connection logic.");
+
+            ImGuiEx.Separator(ImGui.GetContentRegionAvail().X - WindowPadding.X);
+            AddWarn("..can I take a break yet? ; w;");
+
+            EndContainer();
+        }
+
+        if(BeginContainer($"v1.1.0.1 - 2026.07.06")) {
             AddHeader("Sync Service");
             AddEntry("Tiny update to fix uri changes not syncing = w=");
             AddEntry("Also added a little bit of logging to debug connection issues maybe.");
@@ -89,7 +123,7 @@ public class UpdatesWindow : BaseWindow {
             EndContainer();
         }
 
-        if(BeginContainer($"v1.1.0.0 - 2026.07.06", true)) {
+        if(BeginContainer($"v1.1.0.0 - 2026.07.06")) {
             AddHeader("Sync Service");
             AddEntry("Sync Service is now available, the connection toggle button can be found in the main PyonPix window. Connection to the service is automatic upon character login until manually disconnecting from the service.");
             AddNotice("Do be aware this service provides a means of conveniently sharing/updating a Pix with others. It does not provide a means of streaming media itself, you will still need to use other 3rd party web services.");

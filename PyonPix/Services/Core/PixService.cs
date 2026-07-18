@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -17,6 +18,7 @@ using PyonPix.Shared.Structs.Territory;
 using PyonPix.Shared.Sync.Dto;
 using PyonPix.Shared.Sync.Dto.Subbed;
 using PyonPix.Shared.Utility;
+using PyonPix.Structs.Browser;
 
 namespace PyonPix.Services.Core;
 
@@ -33,7 +35,7 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
     public int PixSpawnLimit => Config.Global.General.PixSpawnLimit;
 
     public List<LocalPix> LocalPixs => Config.LocalPixs;
-    public readonly Dictionary<string, SyncedPix> SyncedPixs = [];
+    public readonly ConcurrentDictionary<string, SyncedPix> SyncedPixs = [];
 
     public Dictionary<string, PixVariant> GetPixVariantsForCurrentCharacter() {
         var contentId = StateService.LocalPlayerContentId;
@@ -385,7 +387,7 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
             variants.Remove(syncedPixId);
         }
 
-        SyncedPixs.Remove(syncedPixId);
+        SyncedPixs.Remove(syncedPixId, out _);
         Config.Save();
 
         if(wasActive && linkedLocal != null) {
@@ -402,7 +404,7 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
             PixDespawned?.Invoke(spawned, false);
         }
 
-        SyncedPixs.Remove(syncedPixId);
+        SyncedPixs.Remove(syncedPixId, out _);
         var variants = GetPixVariantsForCurrentCharacter();
         if(variants.Remove(syncedPixId)) {
             Config.Save();
@@ -433,7 +435,7 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
                     PixDespawned?.Invoke(spawned, false);
                 }
 
-                SyncedPixs.Remove(kv.Key);
+                SyncedPixs.Remove(kv.Key, out _);
                 continue;
             }
 
@@ -486,15 +488,14 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
 
     public bool CanSyncEdit(IPix? pix) => pix is SyncedPix synced && synced.CanSyncEdit;
 
-    public void UpdateUri(IPix? pix, bool isNavigationResponse, PixUpdateOrigin origin = PixUpdateOrigin.Local) {
+    public void UpdateUri(IPix? pix, PixUpdateOrigin origin = PixUpdateOrigin.Local, bool performLocalUpdate = true) {
         if(pix == null) return;
+        PublishUpdate(pix, PixUpdateType.Uri, origin, editFinished: true, performLocalUpdate: performLocalUpdate);
+    }
 
-        if(isNavigationResponse) {
-            PublishUpdate(pix, PixUpdateType.Uri, origin, editFinished: true, saveConfig: true, raiseEvent: false);
-            return;
-        }
-
-        PublishUpdate(pix, PixUpdateType.Uri, origin, editFinished: true);
+    public void UpdateMediaState(IPix? pix, PixUpdateOrigin origin = PixUpdateOrigin.Local) {
+        if(pix == null) return;
+        PublishUpdate(pix, PixUpdateType.MediaState, origin, editFinished: true, saveConfig: false);
     }
 
     public void UpdateTerritory(IPix? pix, PixUpdateOrigin origin = PixUpdateOrigin.Local) {
@@ -532,10 +533,10 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
         PublishUpdate(pix, PixUpdateType.AudioProperties, origin, editFinished);
     }
 
-    private void PublishUpdate(IPix pix, PixUpdateType type, PixUpdateOrigin origin, bool editFinished, bool saveConfig = true, bool raiseEvent = true) {
+    private void PublishUpdate(IPix pix, PixUpdateType type, PixUpdateOrigin origin, bool editFinished, bool saveConfig = true, bool raiseEvent = true, bool performLocalUpdate = true) {
         if(saveConfig && editFinished) Config.Save();
         if(!raiseEvent) return;
-        PixUpdated?.Invoke(new(pix, type, origin, editFinished));
+        PixUpdated?.Invoke(new(pix, type, origin, editFinished, performLocalUpdate));
     }
 
     public PixDto BuildPixDto(IPix pix) => new() {
@@ -555,6 +556,7 @@ public class PixService(Configuration config, IServiceContext services) : BaseSe
             case PixUpdateType.InfoProperties: (update as SyncedPixUpdateInfoProperties)?.Info?.ApplyTo(syncedPix.Info); break;
             case PixUpdateType.Uri:
             case PixUpdateType.BrowserProperties: syncedPix.SourcePix.Browser = CloneOrNew((update as SyncedPixUpdateBrowserProperties)?.Browser); break;
+            case PixUpdateType.MediaState: syncedPix.Media = CloneOrNew((update as SyncedPixUpdateMediaState)?.Media); break;
             case PixUpdateType.RendererTransform:
             case PixUpdateType.RendererProperties: syncedPix.SourcePix.Renderer = CloneOrNew((update as SyncedPixUpdateRendererProperties)?.Renderer); break;
             case PixUpdateType.LightTransform:

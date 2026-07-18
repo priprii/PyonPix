@@ -43,5 +43,7 @@ public enum MessageType {
     PixMemberRemoveSuccess,
     PixMemberRemoveFailed,
     ReportPix,
-    ReportUser
+    ReportUser,
+    SyncMediaState,
+    SyncMediaStateResponse
 }

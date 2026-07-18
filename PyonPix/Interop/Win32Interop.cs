@@ -10,6 +10,11 @@ public static class Win32Interop {
     private static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")]
     private static extern int ShowCursor(bool bShow);
+    [DllImport("user32.dll", EntryPoint = "LoadCursorW", ExactSpelling = true)]
+    private static extern nint LoadCursor(nint hInstance, uint lpCursorName);
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern nint SetCursor(nint hCursor);
 
     [DllImport("user32.dll", ExactSpelling = true)]
     private static extern nint GetForegroundWindow();
@@ -46,6 +51,12 @@ public static class Win32Interop {
     }
     public static void EndDrag() {
         ShowCursor(true);
+    }
+
+    public static void SetOSCursor(uint cursorId) {
+        var cursor = LoadCursor(nint.Zero, cursorId);
+        if(cursor != nint.Zero)
+            SetCursor(cursor);
     }
 
     [StructLayout(LayoutKind.Sequential)]

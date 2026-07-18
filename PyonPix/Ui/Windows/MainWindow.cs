@@ -209,11 +209,7 @@ public class MainWindow : BaseWindow {
                 var alias = style.Alias;
                 var aliasSize = ImGui.CalcTextSize(alias);
                 var aliasWidth = rightMinX - midMinX - iconSize;
-                if(SyncService.Client.Premium.IsSubscriber) {
-                    ImGuiEx.StyledText(alias, wrapWidth: aliasWidth, animationType: style.AliasAnimationType, colorA: style.AliasColourA, colorB: style.AliasColourB, glowA: style.AliasGlowA, glowB: style.AliasGlowB);
-                } else {
-                    ImGuiEx.StyledText(alias, wrapWidth: aliasWidth);
-                }
+                ImGuiEx.StyledText(alias, wrapWidth: aliasWidth, animationType: style.AliasAnimationType, colorA: style.AliasColourA, colorB: style.AliasColourB, glowA: style.AliasGlowA, glowB: style.AliasGlowB);
 
                 var usersText = $"{SyncService.Server.UserCount} users";
                 var usersWidth = ImGui.CalcTextSize(usersText).X + (UIShared.TextBgPadding.X * 2);
@@ -421,9 +417,8 @@ public class MainWindow : BaseWindow {
 
         var isSpawned = PixService.IsSpawned(pix);
         var isActive = PixService.IsActive(pix);
-        var isDisabled = (BrowserService.State != BrowserState.Stopped && BrowserService.State != BrowserState.Running) || (tab != null && (tab.State != TabState.Ready || tab.NavState != NavigationState.Ready));
         ImGui.SetCursorScreenPos(playPos);
-        if(ImGuiEx.IconToggleButton(isActive ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play, "##pixToggle", isActive && isSpawned, isDisabled, size: iconSize,
+        if(ImGuiEx.IconToggleButton(isActive ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play, "##pixToggle", isActive && isSpawned, size: iconSize,
             tooltip: isCurrentTerritory ? $"{(isSpawned ? "Despawn Pix" : "Spawn Pix")}" : $"{(isActive ? "Disable Pix" : "Enable Pix")}",
             tooltipSub: isCurrentTerritory ? string.Empty : "Toggle whether to spawn this Pix when you're in the same territory.")) {
             PixService.Toggle(pix);

@@ -24,6 +24,7 @@ internal static class Program {
     private static OnHistoryChangedCallback OnHistoryChanged = null!;
     private static OnTitleChangedCallback OnTitleChanged = null!;
     private static OnFavIconChangedCallback OnFavIconChanged = null!;
+    private static OnWebMessageReceivedCallback OnWebMessageReceived = null!;
     private static OnExtensionOperationCallback OnExtensionOperation = null!;
 
     [STAThread]
@@ -56,6 +57,8 @@ internal static class Program {
                 BrowserInterop.CreateTab(e.PixId, e.GpuAcceleration, e.X, e.Y, e.W, e.H, e.SyncCookies, extensions, extensions.Length);
             };
             Ipc.OnDestroyTab += (e) => BrowserInterop.DestroyTab(e.PixId);
+            Ipc.OnUpdateMediaState += (e) => BrowserInterop.UpdateMediaState(e.PixId, (uint)e.Action, e.IsPlaying, e.SeekTime, e.Duration, e.Timestamp);
+            Ipc.OnToggleTheatreMode += (e) => BrowserInterop.ToggleTheatreMode(e.PixId);
             Ipc.OnNavigate += (e) => BrowserInterop.Navigate(e.PixId, e.Uri);
             Ipc.OnReload += (e) => BrowserInterop.Reload(e.PixId);
             Ipc.OnStopNavigation += (e) => BrowserInterop.StopNavigation(e.PixId);
@@ -100,6 +103,7 @@ internal static class Program {
             Marshal.Copy(data, bytes, 0, length);
             Ipc.SendFavIconChanged(pixId, bytes);
         };
+        OnWebMessageReceived = (pixId, json) => Ipc.SendWebMessageReceived(pixId, json);
         OnExtensionOperation = (extensionOp, extensionId) => Ipc.SendExtensionOperation(extensionOp, extensionId);
 
         BrowserInterop.RegisterCallbacks(
@@ -117,6 +121,7 @@ internal static class Program {
             OnHistoryChanged,
             OnTitleChanged,
             OnFavIconChanged,
+            OnWebMessageReceived,
             OnExtensionOperation
         );
     }

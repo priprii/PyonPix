@@ -1,4 +1,5 @@
-﻿using PyonPix.Shared.Structs.Pix;
+﻿using PyonPix.Shared.Structs.Browser.WebMessages;
+using PyonPix.Shared.Structs.Pix;
 using PyonPix.Shared.Structs.Pix.Properties;
 
 namespace PyonPix.Shared.Sync.Dto;
@@ -32,6 +33,11 @@ public class SyncedPixUpdateBrowserProperties(string pixId, SyncedBrowserPixProp
     public override PixUpdateType UpdateType => PixUpdateType.BrowserProperties;
 
     public SyncedBrowserPixProperties Browser { get; set; } = browser;
+}
+public class SyncedPixUpdateMediaState(string pixId, MediaState? media) : BaseSyncedPixUpdate(pixId) {
+    public override PixUpdateType UpdateType => PixUpdateType.MediaState;
+
+    public MediaState? Media { get; set; } = media;
 }
 public class SyncedPixUpdateRendererProperties(string pixId, SyncedRendererPixProperties renderer) : BaseSyncedPixUpdate(pixId) {
     public override PixUpdateType UpdateType => PixUpdateType.RendererProperties;

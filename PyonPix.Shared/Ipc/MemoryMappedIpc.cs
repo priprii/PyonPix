@@ -35,6 +35,9 @@ public sealed class MemoryMappedIpc : IDisposable {
     public event Action<NavigationCompleted>? OnNavigationCompleted;
     public event Action<NavigationCanceled>? OnNavigationCanceled;
     public event Action<FavIconChanged>? OnFavIconChanged;
+    public event Action<WebMessageReceived>? OnWebMessageReceived;
+    public event Action<UpdateMediaState>? OnUpdateMediaState;
+    public event Action<ToggleTheatreMode>? OnToggleTheatreMode;
     public event Action<ExtensionOperation>? OnExtensionOperation;
     public event Action<Navigate>? OnNavigate;
     public event Action<Reload>? OnReload;
@@ -73,6 +76,9 @@ public sealed class MemoryMappedIpc : IDisposable {
             { MessagePayload.NavigationCompleted, new((msg) => { if(TryGetPayload(msg.Payload<NavigationCompleted>(), out var payload)) OnNavigationCompleted?.Invoke(payload); }) },
             { MessagePayload.NavigationCanceled, new((msg) => { if(TryGetPayload(msg.Payload<NavigationCanceled>(), out var payload)) OnNavigationCanceled?.Invoke(payload); }) },
             { MessagePayload.FavIconChanged, new((msg) => { if(TryGetPayload(msg.Payload<FavIconChanged>(), out var payload)) OnFavIconChanged?.Invoke(payload); }) },
+            { MessagePayload.WebMessageReceived, new((msg) => { if(TryGetPayload(msg.Payload<WebMessageReceived>(), out var payload)) OnWebMessageReceived?.Invoke(payload); }) },
+            { MessagePayload.UpdateMediaState, new((msg) => { if(TryGetPayload(msg.Payload<UpdateMediaState>(), out var payload)) OnUpdateMediaState?.Invoke(payload); }) },
+            { MessagePayload.ToggleTheatreMode, new((msg) => { if(TryGetPayload(msg.Payload<ToggleTheatreMode>(), out var payload)) OnToggleTheatreMode?.Invoke(payload); }) },
             { MessagePayload.ExtensionOperation, new((msg) => { if(TryGetPayload(msg.Payload<ExtensionOperation>(), out var payload)) OnExtensionOperation?.Invoke(payload); }) },
             { MessagePayload.Navigate, new((msg) => { if(TryGetPayload(msg.Payload<Navigate>(), out var payload)) OnNavigate?.Invoke(payload); }) },
             { MessagePayload.Reload, new((msg) => { if(TryGetPayload(msg.Payload<Reload>(), out var payload)) OnReload?.Invoke(payload); }) },
@@ -251,6 +257,27 @@ public sealed class MemoryMappedIpc : IDisposable {
         var fbb = new FlatBufferBuilder(128);
         var payload = FavIconChanged.CreateFavIconChanged(fbb, fbb.CreateString(pixId), FavIconChanged.CreateDataVector(fbb, data));
         IpcMessage.FinishIpcMessageBuffer(fbb, IpcMessage.CreateIpcMessage(fbb, MessagePayload.FavIconChanged, payload.Value));
+        SendRaw(fbb.SizedByteArray());
+    }
+
+    public void SendWebMessageReceived(string pixId, string json) {
+        var fbb = new FlatBufferBuilder(128);
+        var payload = WebMessageReceived.CreateWebMessageReceived(fbb, fbb.CreateString(pixId), fbb.CreateString(json));
+        IpcMessage.FinishIpcMessageBuffer(fbb, IpcMessage.CreateIpcMessage(fbb, MessagePayload.WebMessageReceived, payload.Value));
+        SendRaw(fbb.SizedByteArray());
+    }
+
+    public void SendUpdateMediaState(string pixId, MediaStateAction action, bool isPlaying, long seekTime, long duration, long timeStamp) {
+        var fbb = new FlatBufferBuilder(128);
+        var payload = UpdateMediaState.CreateUpdateMediaState(fbb, fbb.CreateString(pixId), action, isPlaying, seekTime, duration, timeStamp);
+        IpcMessage.FinishIpcMessageBuffer(fbb, IpcMessage.CreateIpcMessage(fbb, MessagePayload.UpdateMediaState, payload.Value));
+        SendRaw(fbb.SizedByteArray());
+    }
+
+    public void SendToggleTheatreMode(string pixId) {
+        var fbb = new FlatBufferBuilder(128);
+        var payload = ToggleTheatreMode.CreateToggleTheatreMode(fbb, fbb.CreateString(pixId));
+        IpcMessage.FinishIpcMessageBuffer(fbb, IpcMessage.CreateIpcMessage(fbb, MessagePayload.ToggleTheatreMode, payload.Value));
         SendRaw(fbb.SizedByteArray());
     }
 

@@ -393,7 +393,7 @@ public class PixConfigWindow : BaseWindow {
         if(SelectedPix is SyncedPix syncedPix) canEdit = syncedPix.CanSyncEdit && SyncService.IsConnectedAuth;
         if(ImGuiEx.StyledInput("##uri", ref props.Uri, "Uri", disabled: !canEdit, maxLength: ushort.MaxValue, width: region.X - Spacing, tooltip: "Current Uri", tooltipSub: "Uri updates when navigating to other pages.\n" +
             "Local files are also supported with file:/// scheme (but won't be synced).") == UIState.Ended) {
-            PixService.UpdateUri(SelectedPix, false);
+            PixService.UpdateUri(SelectedPix);
         }
 
         var gpuBinding = PixService.BindBrowserField(SelectedPix, p => p.GpuAcceleration, (p, v) => p.GpuAcceleration = v, o => o.GpuAcceleration, (o, v) => o.GpuAcceleration = v);

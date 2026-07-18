@@ -28,8 +28,6 @@ struct FindWindowByPidData {
 extern HANDLE RendererThread;
 extern DWORD RendererThreadId;
 extern HANDLE RendererShutdownEvent;
-extern std::mutex CommandMutex;
-extern std::queue<std::function<void()>> CommandQueue;
 
 extern BrowserHost* Host;
 
@@ -37,7 +35,6 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam);
 HWND FindMainWindow(DWORD pid);
 bool IsGameAlive();
 void RestoreGameFocus();
-void EnqueueCommand(std::function<void()> fn);
 void ProcessCommands();
 
 DWORD WINAPI RendererRoutine(void*);
@@ -59,6 +56,7 @@ extern "C" {
             OnHistoryChangedCallback OnHistoryChangedCallback,
             OnTitleChangedCallback OnTitleChangedCallback,
             OnFavIconChangedCallback OnFavIconChangedCallback,
+            OnWebMessageReceivedCallback OnWebMessageReceivedCallback,
             OnExtensionOperationCallback OnExtensionOperationCallback
         );
 
@@ -79,6 +77,12 @@ extern "C" {
 
     __declspec(dllexport)
         void SetFocusedTab(const wchar_t* tabId, bool byUserInput);
+
+    __declspec(dllexport)
+        void UpdateMediaState(const wchar_t* tabId, uint32_t action, bool isPlaying, int64_t seekTime, int64_t duration, int64_t timestamp);
+
+    __declspec(dllexport)
+        void ToggleTheatreMode(const wchar_t* tabId);
 
     __declspec(dllexport)
         void Navigate(const wchar_t* tabId, const wchar_t* url);

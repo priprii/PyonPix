@@ -50,6 +50,9 @@ internal static class BrowserInterop {
     public delegate void OnFavIconChangedCallback([MarshalAs(UnmanagedType.LPWStr)] string tabId, nint data, int length);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
+    public delegate void OnWebMessageReceivedCallback([MarshalAs(UnmanagedType.LPWStr)] string tabId, [MarshalAs(UnmanagedType.LPWStr)] string json);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
     public delegate void OnExtensionOperationCallback(ExtensionOp opType, [MarshalAs(UnmanagedType.LPWStr)] string extensionId);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
@@ -68,6 +71,7 @@ internal static class BrowserInterop {
         OnHistoryChangedCallback OnHistoryChangedCallback,
         OnTitleChangedCallback OnTitleChangedCallback,
         OnFavIconChangedCallback OnFavIconChangedCallback,
+        OnWebMessageReceivedCallback OnWebMessageReceivedCallback,
         OnExtensionOperationCallback OnExtensionOperationCallback
     );
 
@@ -88,6 +92,12 @@ internal static class BrowserInterop {
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
     public static extern void SetFocusedTab([MarshalAs(UnmanagedType.LPWStr)] string pixId, bool byUserInput);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
+    public static extern void UpdateMediaState([MarshalAs(UnmanagedType.LPWStr)] string pixId, uint action, bool isPlaying, long seekTime, long duration, long timestamp);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
+    public static extern void ToggleTheatreMode([MarshalAs(UnmanagedType.LPWStr)] string pixId);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
     public static extern void Navigate([MarshalAs(UnmanagedType.LPWStr)] string pixId, [MarshalAs(UnmanagedType.LPWStr)] string url);

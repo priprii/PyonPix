@@ -8,6 +8,8 @@
 #include <cstdarg>
 #include <vector>
 #include <cwchar>
+#include <queue>
+#include <mutex>
 
 #define interface struct
 #define safe_callback(cb, ...) if(!Browser.ShutdownRequested.load(std::memory_order_acquire) && cb) cb(__VA_ARGS__)
@@ -32,7 +34,13 @@ typedef void (*OnNavigationCanceledCallback)(const wchar_t* tabId);
 typedef void (*OnHistoryChangedCallback)(const wchar_t* tabId, const wchar_t* uri);
 typedef void (*OnTitleChangedCallback)(const wchar_t* tabId, const wchar_t* title);
 typedef void (*OnFavIconChangedCallback)(const wchar_t* tabId, const uint8_t* data, size_t length);
+typedef void (*OnWebMessageReceivedCallback)(const wchar_t* tabId, const wchar_t* json);
 typedef void (*OnExtensionOperationCallback)(byte opType, const wchar_t* extensionId);
+
+extern std::mutex CommandMutex;
+extern std::queue<std::function<void()>> CommandQueue;
+void EnqueueCommand(std::function<void()> fn);
+void ProcessCommands();
 
 static struct BrowserProps {
     std::atomic<uint64_t> Heartbeat;
@@ -59,6 +67,7 @@ static struct BrowserProps {
     OnHistoryChangedCallback OnHistoryChanged = nullptr;
     OnTitleChangedCallback OnTitleChanged = nullptr;
     OnFavIconChangedCallback OnFavIconChanged = nullptr;
+    OnWebMessageReceivedCallback OnWebMessageReceived = nullptr;
     OnExtensionOperationCallback OnExtensionOperation = nullptr;
 };
 

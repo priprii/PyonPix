@@ -41,12 +41,11 @@ public class CharacterProperties : ILocal<SyncedCharacterProperties> {
         };
     }
 
-    public bool Equals(CharacterProperties? other, bool isSubscriber) {
+    public bool Equals(CharacterProperties? other) {
         if(other == null) return false;
         var a = ToSynced();
         var b = other.ToSynced();
         if(a.Alias != other.Alias) return false;
-        if(!isSubscriber) return true;
         if(a.AliasStyle?.ColourA != b.AliasStyle?.ColourA) return false;
         if(a.AliasStyle?.ColourB != b.AliasStyle?.ColourB) return false;
         if(a.AliasStyle?.GlowA != b.AliasStyle?.GlowA) return false;

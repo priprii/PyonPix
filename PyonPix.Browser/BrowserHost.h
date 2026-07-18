@@ -57,6 +57,8 @@ public:
     void Shutdown();
     bool IsDispatcherQueueShutdownComplete() const;
 
+    void EnqueueCommand(std::function<void()> fn);
+
     bool CreateTab(const wchar_t* tabId, bool gpuAcceleration, int32_t x, int32_t y, uint32_t w, uint32_t h, bool syncCookies, const std::vector<std::wstring>& installedExtensionIds);
     void DestroyTab(const wchar_t* tabId);
     void NotifyTabReady(const std::wstring& tabId);

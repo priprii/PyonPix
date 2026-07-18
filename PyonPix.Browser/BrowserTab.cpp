@@ -235,6 +235,23 @@ bool BrowserTab::CreateController(int32_t x, int32_t y, uint32_t w, uint32_t h) 
                 sender->Stop();
                 auto html = BuildErrorPage(errorInfo, NavigatedURI.empty() ? L"Unknown" : NavigatedURI.c_str());
                 WebView->NavigateToString(html.c_str());
+                safe_callback(Browser.OnNavigationCompleted, TabId.c_str(), errorInfo.HttpCode);
+                return S_OK;
+            }
+
+            if(status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED && !NavigatedURI.empty()) {
+                auto uri = NavigatedURI;
+
+                std::thread([this, uri]() {
+                    Sleep(1000);
+                    if(IsShuttingDown || !Host) return;
+                    Host->EnqueueCommand([this, uri]() {
+                        if(IsShuttingDown || !WebView) return;
+                        WebView->Navigate(uri.c_str());
+                    });
+                }).detach();
+
+                return S_OK;
             }
 
             safe_callback(Browser.OnNavigationCompleted, TabId.c_str(), errorInfo.HttpCode);
@@ -270,12 +287,12 @@ bool BrowserTab::CreateController(int32_t x, int32_t y, uint32_t w, uint32_t h) 
 
         WebView->add_WebMessageReceived(wrl::Callback<ICoreWebView2WebMessageReceivedEventHandler>([this](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             if(IsShuttingDown) return S_OK;
-            
-            // todo: script injection callback
-            //LPWSTR json = nullptr;
-            //args->get_WebMessageAsJson(&json);
-            //LOGINFO(L"[%s] WebMessage: %s", TabId.c_str(), json);
-            //CoTaskMemFree(json);
+
+            LPWSTR json = nullptr;
+            if(SUCCEEDED(args->get_WebMessageAsJson(&json))) {
+                safe_callback(Browser.OnWebMessageReceived, TabId.c_str(), json);
+                CoTaskMemFree(json);
+            }
             return S_OK;
         }).Get(), &WebViewWebMessageReceivedEventToken);
 
@@ -368,6 +385,8 @@ bool BrowserTab::CreateController(int32_t x, int32_t y, uint32_t w, uint32_t h) 
         UpdateBounds(x, y, w, h);
         InstallPendingExtensions();
 
+        InjectMediaStateScript();
+
         return S_OK;
     }).Get());
 
@@ -409,6 +428,8 @@ void BrowserTab::Shutdown() {
             WebView->remove_FaviconChanged(WebViewFaviconChangedEventToken);
             //WebView->remove_FrameCreated(WebViewFrameCreatedEventToken);
         } catch(...) {}
+
+        WebView->Stop();
     }
 
     if(Controller) {
@@ -770,6 +791,1113 @@ void BrowserTab::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& sender,
     safe_release(frameTex);
     HasNewFrame.store(true, std::memory_order_release);
     frame.Close();
+}
+
+void BrowserTab::UpdateMediaState(uint32_t action, bool isPlaying, int64_t seekTime, int64_t duration, int64_t timestamp) {
+    if(IsShuttingDown || !WebView) return;
+
+    std::wstringstream ss;
+    ss
+        << L"{"
+        << L"\"Action\":" << (int)action << L","
+        << L"\"IsPlaying\":" << (isPlaying ? L"true" : L"false") << L","
+        << L"\"SeekTime\":" << seekTime << L","
+        << L"\"Duration\":" << duration << L","
+        << L"\"Timestamp\":" << timestamp
+        << L"}";
+
+    std::wstring script =
+        L"window.PyonPixMedia?.sync?.applyUpdate(" +
+        ss.str() +
+        L");";
+
+    LOGVERBOSE(L"[%s] Injecting Media State: { Action: %i, IsPlaying: %s, SeekTime: %lli, Duration: %lli, Timestamp: %lli }", TabId.c_str(), action, isPlaying ? L"True" : L"False", seekTime, duration, timestamp);
+    WebView->ExecuteScript(script.c_str(), nullptr);
+}
+
+void BrowserTab::ToggleTheatreMode() {
+    if(IsShuttingDown || !WebView) return;
+
+    WebView->ExecuteScript(L"window.PyonPixMedia?.theatre?.toggle();", nullptr);
+}
+
+void BrowserTab::InjectMediaStateScript() {
+    if(IsShuttingDown || !WebView) return;
+
+    static const wchar_t* script = LR"(
+(() => {
+    if (window !== window.top) return;
+    if (window.PyonPixMedia) return;
+
+    class SiteAdapter {
+        constructor() {
+            this.syncEnabled = true;
+            this.theatreEnabled = true;
+        }
+
+        identify(media) {
+            return {
+                host: 0,
+                source: media.currentSrc || media.src || "",
+                index: 0
+            };
+        }
+    }
+	
+	class MediaManager {
+		constructor() {
+			this.media = null;
+			this.mediaChangedListeners = [];
+			this.lastUrl = location.href;
+		}
+		
+		initialize() {
+			this.observe();
+
+			setTimeout(() => {
+				this.scan();
+			}, 500);
+		}
+
+		observe() {
+			new MutationObserver(() => {
+				this.scan();
+			}).observe(document.body, {
+				childList:true,
+				subtree:true
+			});
+		}
+
+		scan() {
+			const media = document.querySelector("video, audio");
+			if(!media) return;
+			if(media.readyState < HTMLMediaElement.HAVE_METADATA) return;
+			
+			const urlChanged = this.lastUrl !== location.href;
+			if(urlChanged) this.lastUrl = location.href;
+			if(media === this.media && !urlChanged) return;
+			
+			const oldMedia = this.media;
+			this.media = media;
+
+			this.emitMediaChanged(oldMedia, media);
+		}
+
+		onMediaChanged(callback) {
+			this.mediaChangedListeners.push(callback);
+
+			return () => {
+				const index = this.mediaChangedListeners.indexOf(callback);
+				if(index >= 0) this.mediaChangedListeners.splice(index, 1);
+			};
+		}
+
+		emitMediaChanged(oldMedia, newMedia) {
+			for(const callback of this.mediaChangedListeners) {
+				callback(oldMedia, newMedia);
+			}
+		}
+	}
+
+	class MediaController {
+		constructor(mediaManager) {
+			this.mediaManager = mediaManager;
+			this.currentMedia = null;
+			this.currentSource = null;
+			this.lastSource = null;
+			
+			this.mediaChangedListeners = [];
+			this.mediaSourceChangedListeners = [];
+			this.mediaReadyListeners = [];
+			
+			this.unwatch = null;
+
+			this.unsubscribeManager = this.mediaManager.onMediaChanged((oldMedia, newMedia) => {
+				if(this.unwatch) this.unwatch();
+				this.setMedia(newMedia);
+				if(newMedia) this.unwatch = this.watch(newMedia);
+			});
+		}
+		
+		get media() {
+			return this.currentMedia;
+		}
+		
+		setMedia(media) {
+			const oldMedia = this.currentMedia;
+			if(oldMedia === media) return false;
+
+			this.currentMedia = media;
+			this.currentSource = media?.currentSrc || media?.src || null;
+			this.lastSource = null;
+
+			console.log("[PyonPix] SetMedia Element Changed");
+
+			for(const callback of this.mediaChangedListeners)
+				callback(oldMedia, media);
+
+			return true;
+		}
+		
+		watch(media) {
+			const attempt = () => {
+				if(media !== this.currentMedia) return;
+				const currentSrc = media.currentSrc || media.src;
+				if(!currentSrc) return;
+				if(media.readyState < HTMLMediaElement.HAVE_METADATA) return;
+				if(!Number.isFinite(media.duration)) return;
+				if(currentSrc === this.lastSource) return;
+
+				this.lastSource = currentSrc;
+
+				console.log("[PyonPix] MediaReady: ", currentSrc);
+				this.emitMediaReady(media);
+			};
+			
+			const onMetadata = () => {
+				this.checkSourceChanged(media);
+				attempt();
+			};
+			media.addEventListener("loadedmetadata", onMetadata);
+			media.addEventListener("canplay", attempt);
+			media.addEventListener("playing", attempt);
+
+			const observer = new MutationObserver(attempt);
+			observer.observe(media, { attributes: true, attributeFilter: ["src"] });
+
+			const interval = setInterval(() => {
+				this.checkSourceChanged(media);
+				attempt();
+			}, 500);
+
+			return () => {
+				media.removeEventListener("loadedmetadata", onMetadata);
+				media.removeEventListener("canplay", attempt);
+				media.removeEventListener("playing", attempt);
+				
+				observer.disconnect();
+				clearInterval(interval);
+			};
+		}
+		
+		onMediaChanged(callback) {
+			this.mediaChangedListeners.push(callback);
+
+			return () => {
+				const index = this.mediaChangedListeners.indexOf(callback);
+				if(index >= 0) this.mediaChangedListeners.splice(index, 1);
+			};
+		}
+		
+		onMediaSourceChanged(callback) {
+			this.mediaSourceChangedListeners.push(callback);
+
+			return () => {
+				const index = this.mediaSourceChangedListeners.indexOf(callback);
+				if(index >= 0) this.mediaSourceChangedListeners.splice(index, 1);
+			};
+		}
+		
+		checkSourceChanged(media) {
+			const source = media.currentSrc || media.src || "";
+			if(source === this.currentSource) return;
+
+			const oldSource = this.currentSource;
+			this.currentSource = source;
+			this.lastSource = null;
+
+			console.log("[PyonPix] Media Source Changed", { old: oldSource, new: source });
+
+			for(const callback of this.mediaSourceChangedListeners)
+				callback(media, oldSource, source);
+		}
+		
+		onMediaReady(callback) {
+			this.mediaReadyListeners.push(callback);
+
+			return () => {
+				const index = this.mediaReadyListeners.indexOf(callback);
+				if(index >= 0) this.mediaReadyListeners.splice(index, 1);
+			};
+		}
+
+		emitMediaReady(media) {
+			if(media !== this.currentMedia) return;
+			for(const callback of this.mediaReadyListeners)
+				callback(media);
+		}
+
+		play() {
+			if(!this.media) return;
+			return this.media.play();
+		}
+
+		pause() {
+			if(!this.media) return;
+			this.media.pause();
+		}
+
+		togglePlay() {
+			if(!this.media) return;
+			if(this.media.paused) return this.play();
+			this.pause();
+		}
+
+		set volume(value) {
+			if(!this.media) return;
+			this.media.volume = value;
+		}
+
+		get volume() {
+			return this.media?.volume ?? 0;
+		}
+
+		seek(value) {
+			if(!this.media || !this.media.duration) return;
+			this.media.currentTime = value;
+		}
+		
+		get currentTime() {
+			return this.media?.currentTime ?? 0;
+		}
+
+		get duration() {
+			return this.media?.duration ?? 0;
+		}
+
+		get paused() {
+			return this.media?.paused ?? true;
+		}
+	}
+
+    class Theatre {
+        constructor(mediaController) {
+            this.mediaController = mediaController;
+			
+            this.enabled = false;
+			this.activeMedia = null;
+            this.overlay = null;
+            this.controls = null;
+			this.videoContainer = null;
+			
+			this.originalParent = null;
+			this.originalNextSibling = null;
+			this.originalStyle = null;
+			this.originalOverflow = null;
+
+			this.controlsHovered = false;
+            this.hideTimer = null;
+        }
+
+        initialize() {
+            this.createOverlay();
+			
+			this.mediaController.onMediaChanged((oldMedia, newMedia) => {
+				console.log("[PyonPix] Theatre Media Changed", { old: oldMedia?.currentSrc, new: newMedia?.currentSrc, enabled: this.enabled });
+
+				if(newMedia instanceof HTMLVideoElement && !this.enabled)
+					this.enable();
+			});
+			
+			this.mediaController.onMediaSourceChanged((media, oldSrc, newSrc) => {
+				console.log("[PyonPix] Theatre source Changed", { oldSrc, newSrc, enabled: this.enabled });
+				if(media instanceof HTMLVideoElement && !this.enabled)
+					this.enable();
+			});
+        }
+
+        createOverlay() {
+			const fa = document.createElement("link");
+			fa.rel = "stylesheet";
+			fa.href = "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css";
+			document.head.appendChild(fa);
+			
+            this.overlay = document.createElement("div");
+            this.overlay.id = "pyonpix-overlay";
+
+			Object.assign(this.overlay.style, {
+				position: "fixed",
+				inset: "0",
+				display: "none",
+				zIndex: "2147483646",
+				pointerEvents: "auto",
+				background:"transparent"
+			});
+			
+			this.videoContainer = document.createElement("div");
+			Object.assign(this.videoContainer.style, {
+				position: "absolute",
+				inset: "0",
+				display: "flex",
+				justifyContent: "center",
+				alignItems: "center",
+				overflow: "hidden",
+				background: "black",
+				zIndex:"0",
+				pointerEvents:"auto"
+			});
+			
+			this.controlsOverlay = document.createElement("div");
+			Object.assign(this.controlsOverlay.style, {
+				position: "fixed",
+				inset: "0",
+				display: "none",
+				zIndex: "2147483647",
+				pointerEvents: "none"
+			});
+			
+			this.controls = document.createElement("div");
+			Object.assign(this.controls.style, {
+				position: "absolute",
+				left: "0",
+				right: "0",
+				bottom: "0",
+				height: "54px",
+				display: "flex",
+				alignItems: "center",
+				padding: "18px 6px 6px 6px",
+				gap: "6px",
+				background: "rgba(0,0,0,0.65) ",
+				pointerEvents: "auto",
+				opacity: "1",
+				transition: "opacity 0.2s",
+				overflow: "visible"
+			});
+			
+			document.body.append(this.overlay, this.controlsOverlay);
+			this.overlay.append(this.videoContainer);
+			this.controlsOverlay.append(this.controls);
+			
+			const style = document.createElement("style");
+			style.textContent = `
+			html.pyonpix-theatre video {
+				width:100% !important;
+				height:100% !important;
+				max-width:none !important;
+				max-height:none !important;
+				object-fit:contain !important;
+			}
+
+			/* Controls */
+			#pyonpix-controls button {
+				background:none;
+				border:none;
+				width: 26px;
+				height: 26px;
+				padding:0;
+				color:white;
+				font-size:26px;
+				cursor:pointer;
+				display:flex;
+				align-items:center;
+				justify-content:center;
+			}
+
+			#pyonpix-controls button:hover {
+				color:#aaa;
+			}
+
+			#pyonpix-controls span {
+				color:white;
+				font-size:14px;
+				white-space:nowrap;
+				font-family:Arial,sans-serif;
+			}
+
+			/* Seek / volume bars */
+			#pyonpix-seek,
+			#pyonpix-volume {
+				appearance:none;
+				-webkit-appearance:none;
+				height:10px;
+				cursor:pointer;
+				background:transparent;
+			}
+
+			#pyonpix-seek::-webkit-slider-runnable-track {
+				height:10px;
+				background:
+					linear-gradient(
+						to right,
+						#f00 0%,
+						#f00 var(--progress, 0%),
+						#333 var(--progress, 0%),
+						#333 100%
+					);
+			}
+
+			#pyonpix-volume::-webkit-slider-runnable-track {
+				height:10px;
+				background:
+					linear-gradient(
+						to right,
+						white 0%,
+						white var(--progress, 100%),
+						#333 var(--progress, 100%),
+						#333 100%
+					);
+			}
+
+			#pyonpix-seek::-webkit-slider-thumb,
+			#pyonpix-volume::-webkit-slider-thumb {
+				width:10px;
+				height:10px;
+				border-radius:50%;
+				background:transparent;
+				border:none;
+				opacity:0;
+			}
+
+			/* Layout */
+			#pyonpix-controls {
+				user-select:none;
+			}
+
+			#pyonpix-volume {
+				width:80px;
+			}
+
+			#pyonpix-seek {
+				position:absolute;
+				left:2px;
+				right:2px;
+				top:2px;
+				width:calc(100% - 4px);
+			}
+			`;
+			document.head.appendChild(style);
+
+            this.buildControls();
+			
+			document.addEventListener("mousemove", () => {
+				this.showControls();
+			}, true);
+			
+			this.controls.addEventListener("mouseenter", () => {
+				this.controlsHovered = true;
+				clearTimeout(this.hideTimer);
+				this.controls.style.opacity = "1";
+			});
+
+			this.controls.addEventListener("mouseleave", () => {
+				this.controlsHovered = false;
+				this.startHideTimer();
+			});
+			
+			this.videoContainer.addEventListener("click", e => {
+				if(!this.enabled) return;
+				this.mediaController.togglePlay();
+				e.preventDefault();
+				e.stopImmediatePropagation();
+			}, true);
+        }
+		
+		showControls() {
+			if(!this.enabled) return;
+
+			this.controls.style.opacity = "1";
+			clearTimeout(this.hideTimer);
+			this.hideTimer = setTimeout(() => {
+				this.controls.style.opacity = "0";
+			}, 1500);
+		}
+		
+		showControls() {
+			if(!this.enabled) return;
+
+			this.controls.style.opacity = "1";
+			clearTimeout(this.hideTimer);
+			if(!this.controlsHovered)
+				this.startHideTimer();
+		}
+		
+		startHideTimer() {
+			clearTimeout(this.hideTimer);
+
+			this.hideTimer = setTimeout(() => {
+				if(!this.controlsHovered)
+					this.controls.style.opacity = "0";
+			}, 1500);
+		}
+
+        buildControls() {
+            this.playButton = this.makeButton("fa-solid fa-play");
+			
+			this.resync = this.makeButton("fa-solid fa-rotate");
+
+            this.time = document.createElement("span");
+
+            this.seek = document.createElement("input");
+			this.seek.id = "pyonpix-seek";
+            this.seek.type = "range";
+            this.seek.min = 0;
+            this.seek.max = 1000;
+			
+			this.volumeButton = this.makeButton("fa-solid fa-volume-high");
+
+            this.volume = document.createElement("input");
+			this.volume.id = "pyonpix-volume";
+            this.volume.type = "range";
+            this.volume.min = 0;
+            this.volume.max = 100;
+            this.volume.value = 100;
+
+            this.volumeContainer = document.createElement("div");
+			Object.assign(this.volumeContainer.style,{
+				display:"flex",
+				alignItems:"center",
+				gap:"8px",
+				color:"white"
+			});
+			
+			this.volumeContainer.append(this.volumeButton, this.volume);
+
+            this.theatre = this.makeButton("fa-solid fa-expand");
+
+			this.controls.id = "pyonpix-controls";
+            this.controls.append(this.seek, this.playButton, this.resync, this.time);
+			
+			const spacer = document.createElement("div");
+			Object.assign(spacer.style,{
+				flex:"1"
+			});
+			
+			this.controls.append(spacer, this.volumeContainer, this.theatre);
+
+            this.playButton.onclick = () => this.mediaController.togglePlay();
+
+			this.resync.onclick = () => {
+				const media = this.mediaController.media;
+				if(!media) return;
+				if(!Number.isFinite(media.duration)) return;
+				
+				chrome.webview.postMessage({
+					Type: "MediaResync",
+					Payload: {
+						Action: media.paused ? SyncAction.Pause : SyncAction.Play,
+						IsPlaying: !media.paused,
+						SeekTime: Math.floor(media.currentTime * 1000),
+						Duration: Math.floor(media.duration * 1000),
+						Timestamp: Date.now()
+					}
+				});
+            };
+			
+			this.volumeButton.onclick = () => {
+				if(this.mediaController.volume > 0) {
+					this.previousVolume = this.mediaController.volume;
+					this.mediaController.volume = 0;
+				} else {
+					this.mediaController.volume = this.previousVolume ?? 1;
+				}
+			};
+			
+			this.volume.oninput = () => this.mediaController.volume = this.volume.value / 100;
+
+			this.seeking = false;
+			this.seek.onpointerdown = () => { this.seeking = true; };
+			this.seek.onpointerup = () => {
+				this.seeking = false;
+				this.mediaController.seek(this.mediaController.duration * this.seek.value / 1000);
+			};
+			this.seek.oninput = () => {
+				if(!this.seeking) return;
+				const time = this.mediaController.duration * this.seek.value / 1000;
+				this.time.textContent = this.formatTime(time) + " / " + this.formatTime(this.mediaController.duration);
+			};
+			
+            this.theatre.onclick = () => {
+                this.toggle();
+            };
+        }
+
+		makeButton(icon) {
+			const b = document.createElement("button");
+			const i = document.createElement("i");
+			i.className = icon;
+			b.appendChild(i);
+			return b;
+		}
+
+        enable() {
+			const media = this.mediaController.media;
+			if(!(media instanceof HTMLVideoElement)) return;
+			if(this.enabled && this.activeMedia === media) return;
+			if(this.enabled) this.disable();
+			
+            this.enabled = true;
+			this.activeMedia = media;
+			
+			this.originalParent = media.parentNode;
+			this.originalNextSibling = media.nextSibling;
+			
+			this.originalStyle = {
+				width: media.style.width,
+				height: media.style.height,
+				position: media.style.position,
+				objectFit: media.style.objectFit,
+				transform: media.style.transform,
+				margin: media.style.margin,
+				maxWidth: media.style.maxWidth,
+				maxHeight: media.style.maxHeight
+			};
+			
+			this.overlay.style.display = "block";
+			this.controlsOverlay.style.display = "block";
+			
+			this.videoContainer.appendChild(media);
+			
+			Object.assign(media.style,{
+				position:"relative",
+				width:"100%",
+				height:"100%",
+				maxWidth:"100%",
+				maxHeight:"100%",
+				objectFit:"contain",
+				transform:"none",
+				margin:"0"
+			});
+			
+			this.volume.value = this.mediaController.volume * 100;
+			document.documentElement.classList.add("pyonpix-theatre");
+
+			this.originalOverflow = document.body.style.overflow;
+			document.body.style.overflow="hidden";
+        }
+
+        disable() {
+			if(!this.enabled) return;
+
+			const media = this.activeMedia;
+			if(media && this.originalParent){
+				if(this.originalNextSibling)
+					this.originalParent.insertBefore(media, this.originalNextSibling);
+				else
+					this.originalParent.appendChild(media);
+			}
+			
+			if(media && this.originalStyle){
+				Object.assign(media.style, this.originalStyle);
+			}
+			
+			document.documentElement.classList.remove("pyonpix-theatre");
+			
+			document.body.style.overflow = this.originalOverflow;
+			this.overlay.style.display = "none";
+			this.controlsOverlay.style.display = "none";
+			
+			this.enabled = false;
+			this.activeMedia = null;
+        }
+
+        toggle() {
+            if(this.enabled) {
+                this.disable();
+            } else {
+                this.enable();
+            }
+        }
+
+        update() {
+			if(!this.mediaController.media) return;
+
+			this.playButton.firstChild.className = this.mediaController.paused ? "fa-solid fa-play" : "fa-solid fa-pause";
+			
+			const current = this.mediaController.currentTime;
+			const duration = this.mediaController.duration;
+
+            this.time.textContent = this.formatTime(current) + " / " + this.formatTime(duration);
+			
+			if(duration && !this.seeking) {
+				const progress = current / duration * 100;
+				this.seek.value = current / duration * 1000;
+				this.seek.style.setProperty("--progress", `${progress}%`);
+			}
+
+			const volume = this.mediaController.volume * 100;
+			if(volume === 0)
+				this.volumeButton.firstChild.className = "fa-solid fa-volume-xmark";
+			else if(volume < 50)
+				this.volumeButton.firstChild.className = "fa-solid fa-volume-low";
+			else
+				this.volumeButton.firstChild.className = "fa-solid fa-volume-high";
+			this.volume.value = volume;
+			this.volume.style.setProperty("--progress", `${volume}%`);
+        }
+		
+		formatTime(seconds) {
+            if(!Number.isFinite(seconds)) return "--:--";
+
+            seconds = Math.floor(seconds);
+
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor(seconds / 60) % 60;
+            const s = seconds % 60;
+
+            if(h) return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+
+            return `${m}:${String(s).padStart(2,"0")}`;
+        }
+    }
+
+	class KeybindManager {
+		constructor(theatre) {
+			this.theatre = theatre;
+			this.uriOverlay = null;
+			this.uriInput = null;
+		}
+
+		initialize() {
+			this.createUriOverlay();
+
+			window.addEventListener("keydown", e => {
+				console.log("[PyonPix] KeyDown", {
+					key: e.key,
+					code: e.code,
+					ctrl: e.ctrlKey,
+					alt: e.altKey,
+					shift: e.shiftKey
+				});
+				this.handleKeyDown(e);
+			}, true);
+		}
+
+		handleKeyDown(e) {
+			if(this.isTypingTarget(e.target)) return;
+			if(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+			if(!e.ctrlKey || e.altKey || e.shiftKey) return;
+
+			const key = e.key.toLowerCase();
+			switch(key) {
+				case "f":
+					e.preventDefault();
+					e.stopImmediatePropagation();
+
+					this.theatre.toggle();
+					break;
+				case "e":
+					e.preventDefault();
+					e.stopImmediatePropagation();
+					
+					this.toggleUriInput();
+					break;
+			}
+		}
+
+		isTypingTarget(target) {
+			if(!target) return false;
+			return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+		}
+
+		createUriOverlay() {
+			this.uriOverlay = document.createElement("div");
+			Object.assign(this.uriOverlay.style, {
+				position: "fixed",
+				inset: "0",
+				display: "none",
+				zIndex: "2147483647",
+				background: "rgba(0,0,0,0.5) ",
+				alignItems: "flex-start",
+				justifyContent: "center",
+				paddingTop: "15%",
+				pointerEvents: "auto"
+			});
+
+			this.uriInput = document.createElement("input");
+			Object.assign(this.uriInput.style, {
+				width: "500px",
+				padding: "12px 16px",
+				fontSize: "18px",
+				borderRadius: "6px",
+				border: "none",
+				outline: "none",
+				background: "#222",
+				color: "white",
+				boxShadow: "0 4px 20px rgba(0,0,0,.5) "
+			});
+
+			this.uriInput.placeholder = "Search Google or enter a URI";
+
+			this.uriOverlay.appendChild(this.uriInput);
+			document.body.appendChild(this.uriOverlay);
+
+			this.uriOverlay.addEventListener("mousedown", e => {
+				if(e.target === this.uriOverlay) {
+					this.hideUriInput();
+					e.preventDefault();
+					e.stopPropagation();
+				}
+			}, true);
+			
+			this.uriInput.addEventListener("mousedown", e => {
+				e.stopPropagation();
+			});
+
+			this.uriInput.addEventListener("keydown", e => {
+				e.stopPropagation();
+
+				if(e.key === "Enter") {
+					const uri = this.uriInput.value.trim();
+
+					if(uri) {
+						chrome.webview.postMessage({
+							Type: "Navigate",
+							Payload: {
+								Uri: uri
+							}
+						});
+					}
+
+					this.hideUriInput();
+				}
+			}, true);
+		}
+
+		toggleUriInput() {
+			if(this.uriOverlay.style.display === "flex")
+				this.hideUriInput();
+			else
+				this.showUriInput();
+		}
+
+		showUriInput() {
+			this.uriOverlay.style.display = "flex";
+			this.uriInput.value = location.href;
+
+			setTimeout(() => {
+				this.uriInput.focus();
+				this.uriInput.select();
+			}, 0);
+		}
+
+		hideUriInput() {
+			this.uriOverlay.style.display = "none";
+			this.uriInput.blur();
+		}
+	}
+
+	class SyncAction {
+		static Play = 0;
+		static Pause = 1;
+	}
+	
+	class SyncController {
+		constructor(mediaController) {
+			this.mediaController = mediaController;
+			this.suppressEvents = false;
+			this.unbindEvents = null;
+
+			this.mediaController.onMediaReady(media => {
+				this.onMediaReady(media);
+			});
+
+			this.mediaController.onMediaChanged((oldMedia, newMedia) => {
+				if(this.unbindEvents) this.unbindEvents();
+				if (!newMedia) return;
+				
+				const onPlay = () => this.onPlay(newMedia);
+				const onPause = () => this.onPause(newMedia);
+				const onSeek = () => this.onSeek(newMedia);
+				
+				newMedia.addEventListener("play", onPlay);
+				newMedia.addEventListener("pause", onPause);
+				newMedia.addEventListener("seeked", onSeek);
+
+				this.unbindEvents = () => {
+					newMedia.removeEventListener("play", onPlay);
+					newMedia.removeEventListener("pause", onPause);
+					newMedia.removeEventListener("seeked", onSeek);
+				};
+			});
+		}
+		
+		onMediaReady(media) {
+			if(!Number.isFinite(media.duration)) return;
+			
+			console.log("[PyonPix] Sending MediaReady", {
+				src: media.currentSrc,
+				time: media.currentTime,
+				duration: media.duration,
+				paused: media.paused
+			});
+			
+			setTimeout(() => {
+				chrome.webview.postMessage({
+					Type: "MediaReady",
+					Payload: {
+						Action: media.paused ? SyncAction.Pause : SyncAction.Play,
+						IsPlaying: !media.paused,
+						SeekTime: Math.floor(media.currentTime * 1000),
+						Duration: Math.floor(media.duration * 1000),
+						Timestamp: Date.now()
+					}
+				});
+			}, 0);
+		}
+		
+		onPlay(media) {
+			this.sendState(media, SyncAction.Play);
+		}
+
+		onPause(media) {
+			this.sendState(media, SyncAction.Pause);
+		}
+
+		onSeek(media) {
+			this.sendState(media, media.paused ? SyncAction.Pause : SyncAction.Play);
+		}
+		
+		sendState(media, action) {
+			if(this.suppressEvents) return;
+			if(media.readyState < HTMLMediaElement.HAVE_METADATA) return;
+			if(!Number.isFinite(media.duration)) return;
+
+			chrome.webview.postMessage({
+				Type: "MediaState",
+				Payload: {
+					Action: action,
+					IsPlaying: !media.paused,
+					SeekTime: Math.floor(media.currentTime * 1000),
+					Duration: Math.floor(media.duration * 1000),
+					Timestamp: Date.now()
+				}
+			});
+		}
+		
+		applyUpdate(update) {
+			if(!update) return false;
+			const media = this.mediaController.media;
+			if (!media) return false;
+			if (media.readyState < HTMLMediaElement.HAVE_METADATA) return false;
+
+			this.suppressEvents = true;
+
+			try {
+				let seekTime = update.SeekTime;
+
+				if (update.IsPlaying)
+					seekTime += Math.max(0, Date.now() - update.Timestamp);
+
+				media.currentTime = seekTime / 1000;
+
+				if (update.IsPlaying)
+					media.play().catch(() => {});
+				else
+					media.pause();
+
+				return true;
+			}
+			finally {
+				setTimeout(() => {
+					this.suppressEvents = false;
+				}, 3000);
+			}
+		}
+	}
+
+    class PyonPixMedia {
+        constructor() {
+			this.mediaManager = new MediaManager();
+			this.mediaController = new MediaController(this.mediaManager);
+			this.sync = new SyncController(this.mediaController);
+			this.theatre = new Theatre(this.mediaController);
+			this.keybinds = new KeybindManager(this.theatre);
+			this.adapter = new SiteAdapter();
+        }
+		
+		initialize() {
+			this.waitForDocument(() => {
+				this.waitForBody(() => {
+					this.keybinds.initialize();
+					this.theatre.initialize();
+					this.mediaManager.initialize();
+					this.updateLoop();
+				});
+			});
+		}
+		
+		waitForDocument(callback) {
+			if(document.documentElement) {
+				callback();
+				return;
+			}
+
+			requestAnimationFrame(() => {
+				this.waitForDocument(callback);
+			});
+		}
+		
+		waitForBody(callback) {
+			if(document.body) {
+				callback();
+				return;
+			}
+
+			requestAnimationFrame(() => {
+				this.waitForBody(callback);
+			});
+		}
+		
+		updateLoop() {
+			this.theatre.update();
+			requestAnimationFrame(() => this.updateLoop());
+		}
+    }
+
+    window.PyonPixMedia = new PyonPixMedia();
+    window.PyonPixMedia.initialize();
+})();
+)";
+
+    WebView->AddScriptToExecuteOnDocumentCreated(script, wrl::Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>([this](HRESULT hr, LPCWSTR scriptId) -> HRESULT {
+        if(FAILED(hr)) {
+            LOGERROR(L"[%s] MediaState script injection failed.", TabId.c_str());
+            return S_OK;
+        }
+        return S_OK;
+    }).Get());
+}
+
+std::wstring BrowserTab::EscapeJson(const std::wstring& value) {
+    std::wstring result;
+    result.reserve(value.size());
+
+    for(wchar_t c : value) {
+        switch(c) {
+            case L'\"':
+                result += L"\\\"";
+                break;
+            case L'\\':
+                result += L"\\\\";
+                break;
+            case L'\b':
+                result += L"\\b";
+                break;
+            case L'\f':
+                result += L"\\f";
+                break;
+            case L'\n':
+                result += L"\\n";
+                break;
+            case L'\r':
+                result += L"\\r";
+                break;
+            case L'\t':
+                result += L"\\t";
+                break;
+            default:
+                if(c < 0x20) {
+                    wchar_t buffer[7];
+                    swprintf(buffer, 7, L"\\u%04x", (unsigned int)c);
+                    result += buffer;
+                } else {
+                    result += c;
+                }
+                break;
+        }
+    }
+
+    return result;
 }
 
 WebErrorInfo BrowserTab::GetWebErrorInfoFromStatus(COREWEBVIEW2_WEB_ERROR_STATUS status, BOOL isSuccess) {

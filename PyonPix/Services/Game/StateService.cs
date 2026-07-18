@@ -94,6 +94,7 @@ public class StateService(Configuration config, IServiceContext services) : Base
             if(!Worlds.ContainsKey(region)) Worlds.Add(region, []);
             Worlds[region].Add(new WorldInfo(id, world.Name.ToString()));
         }
+
         foreach(var kvp in Worlds) {
             kvp.Value.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
         }

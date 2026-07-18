@@ -82,6 +82,7 @@ public sealed class ServiceContext : IServiceContext {
         Register(new BrowserService(config, this));
         Register(new LightService(config, this));
         Register(new RendererService(config, this));
+        Register(new PixInputService(config, this));
 
         await Get<StateService>().Initialize();
         await Get<SyncService>().Initialize();
@@ -92,6 +93,7 @@ public sealed class ServiceContext : IServiceContext {
         await Get<BrowserService>().Initialize();
         await Get<LightService>().Initialize();
         await Get<RendererService>().Initialize();
+        await Get<PixInputService>().Initialize();
 
         Framework.Update += Update;
     }
@@ -101,11 +103,13 @@ public sealed class ServiceContext : IServiceContext {
         if(TryGet<SyncService>(out var sync)) sync!.Update();
         if(TryGet<BrowserService>(out var browser)) browser!.Update();
         if(TryGet<RendererService>(out var renderer)) renderer!.Update();
+        if(TryGet<PixInputService>(out var input)) input!.Update();
     }
 
     public async Task Dispose() {
         Framework.Update -= Update;
 
+        if(TryGet<PixInputService>(out var input)) await input!.Dispose();
         if(TryGet<StateService>(out var state)) await state!.Dispose();
         if(TryGet<SyncService>(out var sync)) await sync!.Dispose();
         if(TryGet<RendererService>(out var renderer)) await renderer!.Dispose();

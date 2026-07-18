@@ -79,9 +79,11 @@ void EnqueueCommand(std::function<void()> fn) {
     std::lock_guard<std::mutex> lock(CommandMutex);
     CommandQueue.push(std::move(fn));
 }
-void ProcessCommands() {
-    if(!Browser.IsRunning.load(std::memory_order_acquire)) return;
-    if(Browser.ShutdownRequested.load(std::memory_order_acquire)) return;
+void ProcessCommands(bool force = false) {
+    if(!force) {
+        if(!Browser.IsRunning.load(std::memory_order_acquire)) return;
+        if(Browser.ShutdownRequested.load(std::memory_order_acquire)) return;
+    }
 
     std::queue<std::function<void()>> local;
     {
@@ -89,7 +91,7 @@ void ProcessCommands() {
         std::swap(local, CommandQueue);
     }
 
-    while(!Browser.ShutdownRequested.load(std::memory_order_acquire) && !local.empty()) {
+    while(!local.empty()) {
         try {
             local.front()();
         } catch(...) { }
@@ -138,7 +140,7 @@ DWORD WINAPI RendererRoutine(void*) {
             Browser.ShutdownRequested.store(true, std::memory_order_release);
 
             if(Host && !hostShutdownInitiated) {
-                ProcessCommands();
+                ProcessCommands(true);
                 Host->Shutdown();
                 hostShutdownInitiated = true;
             }
@@ -149,7 +151,7 @@ DWORD WINAPI RendererRoutine(void*) {
             continue;
         }
 
-        ProcessCommands();
+        ProcessCommands(false);
 
         if(Host) Host->PollTabsAndEmitFrames();
 
@@ -179,6 +181,7 @@ DWORD WINAPI RendererRoutine(void*) {
     Browser.OnHistoryChanged = nullptr;
     Browser.OnTitleChanged = nullptr;
     Browser.OnFavIconChanged = nullptr;
+    Browser.OnWebMessageReceived = nullptr;
     Browser.OnExtensionOperation = nullptr;
     memset(&Browser, 0, sizeof(Browser));
 
@@ -205,6 +208,7 @@ extern "C" {
         OnHistoryChangedCallback OnHistoryChangedCallback,
         OnTitleChangedCallback OnTitleChangedCallback,
         OnFavIconChangedCallback OnFavIconChangedCallback,
+        OnWebMessageReceivedCallback OnWebMessageReceivedCallback,
         OnExtensionOperationCallback OnExtensionOperationCallback
     ) {
         Browser.OnLog = OnLogCallback;
@@ -221,6 +225,7 @@ extern "C" {
         Browser.OnHistoryChanged = OnHistoryChangedCallback;
         Browser.OnTitleChanged = OnTitleChangedCallback;
         Browser.OnFavIconChanged = OnFavIconChangedCallback;
+        Browser.OnWebMessageReceived = OnWebMessageReceivedCallback;
         Browser.OnExtensionOperation = OnExtensionOperationCallback;
     }
 
@@ -308,6 +313,31 @@ extern "C" {
         if(Browser.ShutdownRequested.load(std::memory_order_acquire)) return;
         EnqueueCommand([=]() {
             RestoreGameFocus();
+        });
+    }
+
+    void UpdateMediaState(const wchar_t* tabId, uint32_t action, bool isPlaying, int64_t seekTime, int64_t duration, int64_t timestamp) {
+        if(!Browser.IsRunning.load(std::memory_order_acquire)) return;
+        if(Browser.ShutdownRequested.load(std::memory_order_acquire)) return;
+
+        std::wstring key(tabId);
+
+        EnqueueCommand([=]() {
+            if(!Host) return;
+            BrowserTab* t = Host->GetTab(key.c_str());
+            if(t) t->UpdateMediaState(action, isPlaying, seekTime, duration, timestamp);
+        });
+    }
+
+    void ToggleTheatreMode(const wchar_t* tabId) {
+        if(!Browser.IsRunning.load(std::memory_order_acquire)) return;
+        if(Browser.ShutdownRequested.load(std::memory_order_acquire)) return;
+
+        std::wstring key(tabId);
+        EnqueueCommand([=]() {
+            if(!Host) return;
+            BrowserTab* t = Host->GetTab(key.c_str());
+            if(t) t->ToggleTheatreMode();
         });
     }
 

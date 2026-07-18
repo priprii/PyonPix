@@ -167,6 +167,7 @@ public class PixMembersWindow : BaseWindow {
         var items = new List<ContextMenuItem>();
 
         if(IsOwner) {
+            /*
             items.Add(new ContextMenuButton("Promote to Owner", icon: FontAwesomeIcon.Crown,
                     onClick: () => {
                         if(ImGui.IsKeyDown(ImGuiKey.ModCtrl)) ChangeRank(member, PixRank.Owner);
@@ -177,6 +178,7 @@ public class PixMembersWindow : BaseWindow {
                             return ("Promote to Owner", "Hold the Control key to confirm.");
                         return ("Promote to Owner", null);
                     }));
+            */
 
             if(member.Rank != PixRank.CoOwner) {
                 items.Add(new ContextMenuButton("Promote to Co-Owner", icon: FontAwesomeIcon.Crown,

@@ -6,21 +6,22 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility;
 using Dalamud.Utility;
 using PyonPix.Config;
+using PyonPix.Config.Pix;
 using PyonPix.Events;
 using PyonPix.Extensions;
-using PyonPix.Interop;
 using PyonPix.Services;
 using PyonPix.Services.Core;
 using PyonPix.Structs.Browser;
 using PyonPix.Ui.Components;
 using PyonPix.Utility;
-using static PyonPix.Interop.Win32Interop;
 
 namespace PyonPix.Ui.Windows;
 
 public class BrowserWindow : BaseWindow {
     private PixService PixService => Services.Get<PixService>();
     private BrowserService BrowserService => Services.Get<BrowserService>();
+    private PixInputService PixInputService => Services.Get<PixInputService>();
+    private SyncService SyncService => Services.Get<SyncService>();
 
     protected override WindowState State => Config.UI.Browser.Collapsed ? WindowState.Collapsed : WindowState.Expanded;
     protected override Vector2 ExpandedSize => Config.UI.Browser.ExpandedSize;
@@ -61,11 +62,6 @@ public class BrowserWindow : BaseWindow {
         if(BrowserService.State == BrowserState.Stopped || BrowserService.State == BrowserState.Stopping) return;
         // todo: Provide browser exit behaviour?
     }
-
-    private WindowSubclass? WindowSubclass = null!;
-    private bool IsMouseInRenderRegion = false;
-    private bool IsRenderRegionFocused = false;
-
     private float ToolBarHeight => 26f * ImGuiHelpers.GlobalScale;
     private float TitleToolbarHeight => CollapsedHeight + ToolBarHeight;
     private float ButtonSize => ToolBarHeight;
@@ -82,8 +78,6 @@ public class BrowserWindow : BaseWindow {
             new ContextMenuButton("Extension Manager", icon: FontAwesomeIcon.PuzzlePiece, onClick: () => { Windows.Get<ExtensionsWindow>().Toggle(); }),
             new ContextMenuButton("Data Manager", icon: FontAwesomeIcon.Folder, onClick: () => { Windows.Get<DataWindow>().Toggle(); })
         ], width: 140f, itemHeight: 26f);
-
-        WindowSubclass = new WindowSubclass(Services.PluginInterface.UiBuilder.WindowHandlePtr, WndProcDetour);
 
         PixService.PixSpawned += (p, isUserAction) => {
             if(isUserAction) return;
@@ -169,7 +163,7 @@ public class BrowserWindow : BaseWindow {
                     draw.AddRectFilled(tabRectMin, new Vector2(tabRectMax.X, tabRectMax.Y), ImGui.GetColorU32(new Vector4(0.4f, 0.4f, 0.4f, 0.20f)), 2f);
                 }
                 if(ImGui.IsItemClicked()) {
-                    BrowserService.SetFocusedTab(t.PixId, true);
+                    BrowserService.FocusTab(t.PixId, true);
                 }
             } else {
                 draw.AddRectFilled(tabRectMin, new Vector2(tabRectMax.X, tabRectMax.Y), ImGui.GetColorU32(new Vector4(0.4f, 0.4f, 0.4f, 0.10f)), 2f);
@@ -198,24 +192,18 @@ public class BrowserWindow : BaseWindow {
 
         DrawToolbar();
 
-        Vector2 currentSize = IsCollapsed ? Config.UI.Browser.ExpandedSize : ImGui.GetWindowSize();
-        bool sizeChanged = currentSize != PreviousSize;
-        bool mouseDragging = ImGui.IsMouseDragging(ImGuiMouseButton.Left);
-        if(!BrowserService.IsResizing && sizeChanged && mouseDragging) {
-            BrowserService.IsResizing = true;
-        }
-        if(BrowserService.IsResizing && !mouseDragging) {
-            BrowserService.IsResizing = false;
-        }
+        var currentSize = IsCollapsed ? Config.UI.Browser.ExpandedSize : ImGui.GetWindowSize();
+        var sizeChanged = currentSize != PreviousSize;
+        var mouseDragging = ImGui.IsMouseDragging(ImGuiMouseButton.Left);
+        BrowserService.DetermineResizeState(sizeChanged, mouseDragging);
         PreviousSize = currentSize;
 
         var size = IsCollapsed ? currentSize - new Vector2(0, TitleToolbarHeight) : ImGui.GetContentRegionAvail();
         if(BrowserService.Draw(ImGui.GetCursorScreenPos(), IsCollapsed ? size : ImGui.GetContentRegionAvail())) {
-            HandleMouseEvent();
+            if(!IsHidden) PixInputService.HandleImGuiPresentationMouseInput();
         } else {
             WindowName = $"{Plugin.Name}###{Plugin.Name}Browser";
-            IsMouseInRenderRegion = false;
-            IsRenderRegionFocused = false;
+            PixInputService.ClearImGuiPresentationFocus();
         }
     }
     
@@ -237,12 +225,12 @@ public class BrowserWindow : BaseWindow {
         draw.AddLine(sepBottom, new Vector2(sepBottom.X + contentSize.X, sepBottom.Y), ImGui.GetColorU32(UIShared.ToolBarSeparator), MathF.Max(1f, 1f * scale));
 
         ImGui.SetCursorScreenPos(new Vector2(cursorPos.X, sepTop.Y + 1f));
-        if(ImGuiEx.IconButton(FontAwesomeIcon.AngleLeft, "##navBack", !BrowserService.CanGoBack, size: ButtonSize)) BrowserService.NavBack();
+        if(ImGuiEx.IconButton(FontAwesomeIcon.AngleLeft, "##navBack", !BrowserService.CanGoBack, size: ButtonSize, tooltip: "Back", tooltipSub: "Right-click for history")) BrowserService.NavBack();
         if(ImGui.IsItemHovered() && ImGui.IsMouseReleased(ImGuiMouseButton.Right) && BrowserService.FocusedTab?.History.Count > 0) {
             ImGui.OpenPopup("##historyContext");
         }
         ImGui.SameLine(0, Spacing);
-        if(ImGuiEx.IconButton(FontAwesomeIcon.AngleRight, "##navForward", !BrowserService.CanGoForward, size: ButtonSize)) BrowserService.NavForward();
+        if(ImGuiEx.IconButton(FontAwesomeIcon.AngleRight, "##navForward", !BrowserService.CanGoForward, size: ButtonSize, tooltip: "Forward", tooltipSub: "Right-click for history")) BrowserService.NavForward();
         if(ImGui.IsItemHovered() && ImGui.IsMouseReleased(ImGuiMouseButton.Right) && BrowserService.FocusedTab?.History.Count > 0) {
             ImGui.OpenPopup("##historyContext");
         }
@@ -250,22 +238,33 @@ public class BrowserWindow : BaseWindow {
 
         ImGui.SameLine(0, Spacing);
         if(BrowserService.CanCancel) {
-            if(ImGuiEx.IconButton(FontAwesomeIcon.Times, "##navCancel", size: ButtonSize)) BrowserService.NavCancel();
+            if(ImGuiEx.IconButton(FontAwesomeIcon.Times, "##navCancel", size: ButtonSize, tooltip: "Abort")) BrowserService.NavCancel();
         } else {
-            if(ImGuiEx.IconButton(FontAwesomeIcon.Sync, "##navReload", !BrowserService.CanReload, size: ButtonSize)) BrowserService.NavReload();
+            if(ImGuiEx.IconButton(FontAwesomeIcon.Redo, "##navReload", !BrowserService.CanReload, size: ButtonSize, tooltip: "Reload")) BrowserService.NavReload();
         }
         ImGui.SameLine(0, Spacing);
-        if(ImGuiEx.IconButton(FontAwesomeIcon.Home, "##navHome", !BrowserService.CanNavigate, size: ButtonSize)) BrowserService.NavHome();
+        if(ImGuiEx.IconButton(FontAwesomeIcon.Home, "##navHome", !BrowserService.CanNavigate, size: ButtonSize, tooltip: "Home")) BrowserService.NavHome();
+
+        var isSynced = SyncService.IsConnectedAuth && PixService.GetPix(BrowserService.FocusedTab?.PixId) is SyncedPix;
+        int rightIcons = isSynced ? 4 : 3;
 
         ImGui.SameLine(0, Spacing);
-        var inputWidth = ImGui.GetContentRegionAvail().X - (ToolBarHeight * 2) - (Spacing * 2);
+        var inputWidth = ImGui.GetContentRegionAvail().X - (ToolBarHeight * rightIcons) - (Spacing * rightIcons);
         ImGuiEx.StyledInput("##uriInput", ref BrowserService.PresentationUri, "Search Google or enter a URI", disabled: !BrowserService.CanNavigate, maxLength: ushort.MaxValue, width: inputWidth, onEnter: () => { BrowserService.Navigate(BrowserService.PresentationUri); });
 
         ImGui.SameLine(0, Spacing);
-        if(ImGuiEx.IconButton(FontAwesomeIcon.ArrowRight, "##navSubmit", !BrowserService.CanNavigate, size: ButtonSize)) BrowserService.Navigate(BrowserService.PresentationUri);
+        if(ImGuiEx.IconButton(FontAwesomeIcon.ArrowRight, "##navSubmit", !BrowserService.CanNavigate, size: ButtonSize, tooltip: "Submit")) BrowserService.Navigate(BrowserService.PresentationUri);
+
+        if(isSynced) {
+            ImGui.SameLine(0, Spacing);
+            if(ImGuiEx.IconButton(FontAwesomeIcon.Sync, "##sync", !BrowserService.CanNavigate, size: ButtonSize, tooltip: "Resync")) SyncService.SyncMediaState(BrowserService.FocusedTab!.PixId, null);
+        }
 
         ImGui.SameLine(0, Spacing);
-        if(ImGuiEx.IconButton(FontAwesomeIcon.EllipsisV, "##configMenu", size: ButtonSize)) {
+        if(ImGuiEx.IconButton(FontAwesomeIcon.Expand, "##theatreMode", !BrowserService.CanNavigate, size: ButtonSize, tooltip: "Toggle Theatre Mode")) BrowserService.ToggleTheatreMode();
+
+        ImGui.SameLine(0, Spacing);
+        if(ImGuiEx.IconButton(FontAwesomeIcon.EllipsisV, "##configMenu", size: ButtonSize, tooltip: "Settings")) {
             ConfigContextMenu.Open();
         }
         ConfigContextMenu.Draw(new Vector2(toolBarMax.X - (140f * ImGuiHelpers.GlobalScale), toolBarMax.Y + (1f * ImGuiHelpers.GlobalScale)));
@@ -354,95 +353,5 @@ public class BrowserWindow : BaseWindow {
         }
 
         ImGui.PopStyleColor(2);
-    }
-
-    private long WndProcDetour(nint hWnd, uint msg, ulong wParam, long lParam) {
-        if(BrowserService.State == BrowserState.Running) {
-            switch((WM)msg) {
-                case WM.ENTERSIZEMOVE:
-                    BrowserService.IsResizing = true;
-                    break;
-                case WM.EXITSIZEMOVE:
-                    BrowserService.IsResizing = false;
-                    break;
-            }
-        }
-        return WindowSubclass!.CallOriginal(hWnd, msg, wParam, lParam);
-    }
-
-    private bool WasGameFocused;
-    private void HandleMouseEvent() {
-        if(IsHidden) return;
-        if(BrowserService.FocusedTab == null) return;
-        if(!PixService.SpawnedPixs.TryGetValue(BrowserService.FocusedTab.PixId, out var p)) return;
-
-        var io = ImGui.GetIO();
-        var bClicked = BrowserUtil.GetMouseButtonsState(io.MouseClicked);
-        var bReleased = BrowserUtil.GetMouseButtonsState(io.MouseReleased);
-        var bDblClicked = BrowserUtil.GetMouseButtonsState(io.MouseDoubleClicked);
-        var anyClicked = bClicked != MouseButton.None || bReleased != MouseButton.None || bDblClicked != MouseButton.None;
-        var anyScroll = io.MouseWheelH != 0 || io.MouseWheel != 0;
-        var localMouse = BrowserService.TranslatePositionRelative(p, io.MousePos - BrowserService.PresentationPosition);
-        var mousePos = localMouse.ToLParam();
-
-        ImGui.SetCursorScreenPos(BrowserService.PresentationPosition);
-        ImGui.InvisibleButton("##browserInputHitTest", BrowserService.PresentationSize);
-
-        if(bClicked.HasFlag(MouseButton.Left) || bClicked.HasFlag(MouseButton.Right) || bClicked.HasFlag(MouseButton.Middle)) {
-            if(IsMouseInRenderRegion && !IsRenderRegionFocused) {
-                IsRenderRegionFocused = true; // Gain focus while game window active
-            }
-        }
-
-        if(!WasGameFocused && Win32Interop.IsGameFocused) {
-            if(ImGui.IsItemHovered()) {
-                IsRenderRegionFocused = true; // Gain focus after game window active
-            }
-        }
-
-        if(!ImGui.IsWindowFocused() || !Win32Interop.IsGameFocused) {
-            if(IsRenderRegionFocused) {
-                IsRenderRegionFocused = false; // Lose focus due to either imgui loss or game loss
-                BrowserService.LostFocus();
-            }
-        }
-
-        WasGameFocused = Win32Interop.IsGameFocused;
-        
-        if(!ImGui.IsItemHovered()) {
-            if(IsMouseInRenderRegion) {
-                IsMouseInRenderRegion = false;
-                BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.MOUSELEAVE, 0, mousePos);
-            }
-            return;
-        }
-
-        if(!Win32Interop.IsGameFocused) {
-            IsMouseInRenderRegion = false;
-            return;
-        }
-        IsMouseInRenderRegion = true;
-
-        ImGui.SetMouseCursor(BrowserUtil.TranslateCursor(BrowserService.CursorId));
-
-        if(io.MouseDelta == Vector2.Zero && !anyClicked && !anyScroll) return;
-        if(!anyClicked && !anyScroll) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.MOUSEMOVE, 0, mousePos);
-
-        if(bClicked.HasFlag(MouseButton.Left)) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.LBUTTONDOWN, 0x0001, mousePos);
-        if(bReleased.HasFlag(MouseButton.Left)) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.LBUTTONUP, 0, mousePos);
-
-        if(bClicked.HasFlag(MouseButton.Right)) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.RBUTTONDOWN, 0x0001, mousePos);
-        if(bReleased.HasFlag(MouseButton.Right)) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.RBUTTONUP, 0, mousePos);
-
-        if(bClicked.HasFlag(MouseButton.Middle)) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.MBUTTONDOWN, 0x0001, mousePos);
-        if(bReleased.HasFlag(MouseButton.Middle)) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.MBUTTONUP, 0, mousePos);
-
-        if(io.MouseWheel != 0f) BrowserService.SendMouseEvent(p.Id, (uint)Win32Interop.WM.MOUSEWHEEL, (int)(io.MouseWheel * 120) << 16, mousePos);
-    }
-
-    public override void Dispose() {
-        base.Dispose();
-        WindowSubclass?.Dispose();
-        WindowSubclass = null;
     }
 }

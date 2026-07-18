@@ -111,7 +111,7 @@ public class UserWindow : BaseWindow {
         ImGui.Indent(IndentWidth);
         var changed = ImGuiEx.StyledInput("##alias", ref cProps.Alias, "Character Alias..", disabled, NameUtil.AliasMaxLength, itemWidth, tooltip: "Character Alias", 
             tooltipSub: "An alias to identify your current character as, visible to other connected users.\n\n" +
-            "- Supporters can use an alias with reduced limits on use of special characters.\n" +
+            "- Only supporters are able to change alias.\n" +
             "- Inappropriate alias may result in termination from the Sync Service.");
         if(changed != UIState.None){
             LastAliasError = null;
@@ -137,9 +137,9 @@ public class UserWindow : BaseWindow {
         ImGuiEx.ColorPicker3("GlowA##aglowA", ref cProps.AliasGlowA);
         ImGui.SameLine();
         ImGuiEx.ColorPicker3("GlowB##aglowB", ref cProps.AliasGlowB);
-        if(!isSubscriber) {
+        if(!isSubscriber && cProps.AliasAnimationType != AnimationType.Static) {
             using(UIShared.SubFont.Push()) {
-                ImGuiEx.StyledText("Changing Alias Style requires 'Subscriber' role on Pyon Discord", colorA: UIShared.AccentActive.AsVector3(), glowStrength: 0.1f, bgOpacity: 0.3f);
+                ImGuiEx.StyledText("Animated Alias Style requires 'Subscriber' role on Pyon Discord", colorA: UIShared.AccentActive.AsVector3(), glowStrength: 0.1f, bgOpacity: 0.3f);
             }
         }
         ImGui.Unindent(IndentWidth);
@@ -159,17 +159,17 @@ public class UserWindow : BaseWindow {
         ImGuiEx.ColorPicker3("GlowA##pglowA", ref cProps.PixGlowA);
         ImGui.SameLine();
         ImGuiEx.ColorPicker3("GlowB##pglowB", ref cProps.PixGlowB);
-        if(!isSubscriber) {
+        if(!isSubscriber && cProps.PixAnimationType != AnimationType.Static) {
             using(UIShared.SubFont.Push()) {
-                ImGuiEx.StyledText("Changing Pix Style requires 'Subscriber' role on Pyon Discord", colorA: UIShared.AccentActive.AsVector3(), glowStrength: 0.1f, bgOpacity: 0.3f);
+                ImGuiEx.StyledText("Animated Pix Style requires 'Subscriber' role on Pyon Discord", colorA: UIShared.AccentActive.AsVector3(), glowStrength: 0.1f, bgOpacity: 0.3f);
             }
         }
         ImGui.Unindent(IndentWidth);
 
         ImGuiEx.Separator(region);
 
-        if(ImGuiEx.IconTextButton(FontAwesomeIcon.Upload, "Apply", "##apply", disabled || !isSupporter || !string.IsNullOrEmpty(LastAliasError), tooltip: "Apply Alias/Pix Style")) {
-            if(cProps.Equals(SyncService.Client.Style, isSubscriber)) return;
+        if(ImGuiEx.IconTextButton(FontAwesomeIcon.Upload, "Apply", "##apply", disabled || !string.IsNullOrEmpty(LastAliasError), tooltip: "Apply Alias/Pix Style")) {
+            if(cProps.Equals(SyncService.Client.Style)) return;
 
             if(NameUtil.ValidateAlias(cProps.Alias, SyncService.Client.Premium, out var error)) {
                 Config.Save();

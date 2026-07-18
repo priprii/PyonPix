@@ -11,6 +11,7 @@ using PyonPix.Config.Pix;
 using PyonPix.Events;
 using PyonPix.Services.Game;
 using PyonPix.Shared.Structs;
+using PyonPix.Shared.Structs.Browser.WebMessages;
 using PyonPix.Shared.Structs.Pix;
 using PyonPix.Shared.Sync;
 using PyonPix.Shared.Sync.Dto;
@@ -63,6 +64,8 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
     public List<SyncablePixQueryItemDto> SyncablePixs = [];
 
     public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
+    private volatile bool IsDisconnectRequested;
+    private int ReconnectPending;
     public string? StatusMessage { get; private set; }
 
     public ServerSession Server { get; private set; } = new();
@@ -167,6 +170,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
             case PixUpdateType.InfoProperties: update = new SyncedPixUpdateInfoProperties(syncedPix.Id, syncedPix.Info.ToSynced()); break;
             case PixUpdateType.Uri:
             case PixUpdateType.BrowserProperties: update = new SyncedPixUpdateBrowserProperties(syncedPix.Id, syncedPix.Browser.ToSynced()); break;
+            case PixUpdateType.MediaState: update = new SyncedPixUpdateMediaState(syncedPix.Id, syncedPix.Media); break;
             case PixUpdateType.RendererTransform:
             case PixUpdateType.RendererProperties: update = new SyncedPixUpdateRendererProperties(syncedPix.Id, syncedPix.Renderer.ToSynced()); break;
             case PixUpdateType.LightTransform:
@@ -189,6 +193,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
 
     public void Connect() => _ = ConnectAsync();
     private async Task ConnectAsync() {
+        IsDisconnectRequested = false;
         await ConnectionLock.WaitAsync();
         if(State is ConnectionState.Connecting or ConnectionState.Connected) {
             ConnectionLock.Release();
@@ -206,18 +211,19 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
         for(int attempt = 1; attempt <= MaxConnectionAttempts; attempt++) {
             try {
                 var socket = new ClientWebSocket();
+                await Task.Delay(1000, ConnectionCts.Token);
                 await socket.ConnectAsync(Api.Socket, ConnectionCts.Token);
 
                 await ConnectionLock.WaitAsync();
                 Socket?.Dispose();
                 Socket = socket;
+                ConnectionLock.Release();
 
                 ReceiveLoopTask = Task.Run(() => ReceiveLoopAsync(ConnectionCts.Token));
 
                 await SendAsync(MessageType.AuthRequest, new AuthRequestDto(Plugin.Version, StateService.LocalPlayerContentId, Config.Sync.SecretKey, StateService.CurrentTerritory?.ToDto() ?? new()));
                 Services.Log.Verbose($"[SyncService] Connected ({attempt}:{StateService.LocalPlayerContentId})");
                 SetState(ConnectionState.Connected, "Connected", StatusType.Hide);
-                ConnectionLock.Release();
                 return;
             } catch(OperationCanceledException) {
                 Services.Log.Verbose($"[SyncService] Connection Aborted ({attempt}:{StateService.LocalPlayerContentId})");
@@ -250,6 +256,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
 
     public void Disconnect() => _ = DisconnectAsync();
     private async Task DisconnectAsync() {
+        IsDisconnectRequested = true;
         ConnectionCts?.Cancel();
         await ConnectionLock.WaitAsync();
         try {
@@ -276,26 +283,23 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
                     do {
                         result = await Socket.ReceiveAsync(buffer, token);
                         if(result.MessageType == WebSocketMessageType.Close) {
-                            Services.Log.Warning($"[SyncService] {result.CloseStatusDescription}");
-                            SetState(ConnectionState.Disconnected, $"{result.CloseStatusDescription}", StatusType.Error);
-                            if(result.CloseStatusDescription == "Heartbeat Timeout") {
-                                Services.Log.Warning($"[SyncService] Server Disconnected [Heartbeat Timeout], Reconnecting..");
-                                StatusMessage = "Reconnecting..";
-                                Connect();
-                            } else {
-                                StatusMessage = $"Server Disconnected";
-                            }
+                            var reason = result.CloseStatusDescription ?? "Unknown";
+                            Services.Log.Warning($"[SyncService] Server Closed Connection: {reason}");
+                            SetState(ConnectionState.Disconnected, reason, StatusType.Error);
                             return;
                         }
                         ms.Write(buffer, 0, result.Count);
                     } while(!result.EndOfMessage && !token.IsCancellationRequested);
                 } catch(OperationCanceledException) {
                     break;
-                } catch(WebSocketException) {
+                } catch(WebSocketException ex) {
+                    Services.Log.Warning($"[SyncService] WebSocketException ({ex.WebSocketErrorCode})");
                     break;
-                } catch(IOException) {
+                } catch(IOException ex) {
+                    Services.Log.Warning($"[SyncService] IOException ({ex.HResult})");
                     break;
                 }
+                
                 var json = Encoding.UTF8.GetString(ms.ToArray());
                 if(!SyncData.TryGetMessage(json, out SocketMessage message)) continue;
                 switch(message.Type) {
@@ -471,6 +475,11 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
                             PixService.ApplyPixPropertyUpdate(update);
                             break;
                         }
+                    case MessageType.SyncMediaStateResponse: {
+                            if(!SyncData.TryGetSyncedPixUpdate(message.Data, out BaseSyncedPixUpdate update)) break;
+                            PixService.ApplyPixPropertyUpdate(update);
+                            break;
+                        }
                     case MessageType.SyncedPixMembersUpdate: {
                         if(SyncData.TryGetObject(message.Data, out SyncedPixMembersResponseDto membersResp))
                             SyncedPixMembersUpdated?.Invoke(membersResp);
@@ -480,11 +489,7 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
                         if(SyncData.TryGetObject(message.Data, out PremiumStatus dto)) {
                             Client.Premium = dto;
                             PremiumStatusChanged?.Invoke(dto);
-                            if(dto.IsSupporter || dto.IsSubscriber) {
-                                await SendStyleUpdateAsync();
-                            } else {
-                                PixService.ApplyPixStyleUpdate(new(StateService.LocalPlayerContentId, Client.Style.Alias, null, null));
-                            }
+                            await SendStyleUpdateAsync();
                         }
                         break;
                     }
@@ -515,11 +520,18 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
             Services.Log.Info($"[SyncService] Socket Failed: {ex}");
             SetState(ConnectionState.Disconnected, $"Error: Check /xllog for details", StatusType.Error);
         } finally {
-            if(State != ConnectionState.Disconnected) {
+            if(!IsDisconnectRequested && Interlocked.Exchange(ref ReconnectPending, 1) == 0) {
                 Services.Log.Warning($"[SyncService] Server Disconnected [Connection Closed], Reconnecting..");
                 SetState(ConnectionState.Disconnected, "Server Disconnected, Reconnecting..", StatusType.Warn);
                 StatusMessage = "Reconnecting..";
-                Connect();
+
+                _ = Task.Run(async () => {
+                    try {
+                        Connect();
+                    } finally {
+                        Interlocked.Exchange(ref ReconnectPending, 0);
+                    }
+                });
             }
         }
     }
@@ -568,6 +580,12 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
         }
     }
 
+    public Task SyncMediaState(string pixId, MediaState? media) {
+        if(!IsConnectedAuth) return Task.CompletedTask;
+
+        return SendAsync(MessageType.SyncMediaState, new SyncedPixUpdateMediaState(pixId, media));
+    }
+
     public async Task RequestPixMembersAsync(string pixId) {
         if(!IsConnectedAuth) return;
         await SendAsync(MessageType.SyncedPixMembersRequest, new SyncedPixMembersRequestDto { PixId = pixId });
@@ -596,13 +614,13 @@ public class SyncService(Configuration config, IServiceContext services) : BaseS
 
     public void SendStyleUpdate() => _ = SendStyleUpdateAsync();
     private async Task SendStyleUpdateAsync() {
-        if(!IsConnectedAuth || (!Client.Premium.IsSupporter && !Client.Premium.IsSubscriber)) return;
+        if(!IsConnectedAuth) return;
 
         var cProps = Config.Sync.GetCurrentCharacterProperties(Config, StateService);
         var scProps = cProps.ToSynced();
         if(!Client.Premium.IsSubscriber) {
-            scProps.AliasStyle = null;
-            scProps.PixStyle = null;
+            scProps.AliasStyle?.AnimationType = AnimationType.Static;
+            scProps.PixStyle?.AnimationType = AnimationType.Static;
         }
 
         await SendAsync(MessageType.StyleUpdate, scProps);

@@ -26,6 +26,21 @@ public static class BrowserUtil {
         return $"https://google.com/search?q={Uri.EscapeDataString(uri)}";
     }
 
+    public static string NormalizeUriForSync(string uri) {
+        if(string.IsNullOrWhiteSpace(uri)) return uri;
+        if(!Uri.TryCreate(uri, UriKind.Absolute, out var abs))
+            return uri;
+        if(!abs.Host.Contains("youtube.com") && !abs.Host.Contains("youtu.be"))
+            return uri;
+        var query = System.Web.HttpUtility.ParseQueryString(abs.Query);
+        query.Remove("index");
+        var builder = new UriBuilder(abs) {
+            Port = -1,
+            Query = query.ToString() ?? string.Empty
+        };
+        return builder.ToString();
+    }
+
     private static bool IsNavigableHost(Uri uri) {
         return uri.HostNameType switch {
             UriHostNameType.Dns => uri.Host.Contains('.') && !uri.Host.EndsWith('.'),
@@ -38,11 +53,11 @@ public static class BrowserUtil {
     public static string FormatUriForDisplay(string uri) {
         if(string.IsNullOrEmpty(uri)) return uri;
 
-        if(!Uri.TryCreate(uri, UriKind.Absolute, out var absolute))
+        if(!Uri.TryCreate(uri, UriKind.Absolute, out var abs))
             return uri;
 
-        var host = absolute.Host;
-        var path = absolute.AbsolutePath;
+        var host = abs.Host;
+        var path = abs.AbsolutePath;
 
         return string.IsNullOrWhiteSpace(path) || path == "/" ? string.IsNullOrWhiteSpace(host) ? uri : host : $"{host}{path}";
     }

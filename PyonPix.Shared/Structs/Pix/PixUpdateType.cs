@@ -11,5 +11,6 @@ public enum PixUpdateType {
     LightTransform,
     LightProperties,
     AudioProperties,
-    SyncProperties
+    SyncProperties,
+    MediaState
 }

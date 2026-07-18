@@ -229,6 +229,10 @@ bool BrowserHost::IsDispatcherQueueShutdownComplete() const {
     return false;
 }
 
+void BrowserHost::EnqueueCommand(std::function<void()> fn) {
+    ::EnqueueCommand(std::move(fn));
+}
+
 std::wstring BrowserHost::BuildPersistentUDF() const {
     std::wstring folder = GetUDFPath(L"PIX");
     if(!fs::exists(folder)) fs::create_directories(folder);

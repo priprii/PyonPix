@@ -55,6 +55,7 @@ public static class SyncData {
                 PixUpdateType.Uri => data.Value.Deserialize<SyncedPixUpdateUri>(JsonOptions),
                 PixUpdateType.InfoProperties => data.Value.Deserialize<SyncedPixUpdateInfoProperties>(JsonOptions),
                 PixUpdateType.BrowserProperties => data.Value.Deserialize<SyncedPixUpdateBrowserProperties>(JsonOptions),
+                PixUpdateType.MediaState => data.Value.Deserialize<SyncedPixUpdateMediaState>(JsonOptions),
                 PixUpdateType.RendererTransform or PixUpdateType.RendererProperties => data.Value.Deserialize<SyncedPixUpdateRendererProperties>(JsonOptions),
                 PixUpdateType.LightTransform or PixUpdateType.LightProperties => data.Value.Deserialize<SyncedPixUpdateLightProperties>(JsonOptions),
                 PixUpdateType.AudioProperties => data.Value.Deserialize<SyncedPixUpdateAudioProperties>(JsonOptions),

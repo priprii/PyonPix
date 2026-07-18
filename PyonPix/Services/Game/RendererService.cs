@@ -27,6 +27,7 @@ public class RendererService(Configuration config, IServiceContext services) : B
     private StateService StateService => Services.Get<StateService>();
     private BrowserService BrowserService => Services.Get<BrowserService>();
     private LightService LightService => Services.Get<LightService>();
+    private PixInputService PixInputService => Services.Get<PixInputService>();
 
     private unsafe delegate void OMSetRenderTargetsDelegate(void* context, uint numViews, void** rtvArray, void* depthStencilView);
     private Hook<OMSetRenderTargetsDelegate>? HookOMSetRenderTargets;
@@ -47,11 +48,11 @@ public class RendererService(Configuration config, IServiceContext services) : B
     private ulong LastPresentIndex;
     private bool SceneRendered;
 
-    public readonly Dictionary<(nint rtv, nint dsv), ulong> PairCounts = new();
-    public readonly Dictionary<nint, RTVItem> RTVCache = new();
-    public readonly Dictionary<nint, DSVItem> DSVCache = new();
-    public List<nint> DSVPtrs = new();
-    public RTVItem? TargetRTV;
+    private readonly Dictionary<(nint rtv, nint dsv), ulong> PairCounts = new();
+    private readonly Dictionary<nint, RTVItem> RTVCache = new();
+    private readonly Dictionary<nint, DSVItem> DSVCache = new();
+    private List<nint> DSVPtrs = new();
+    private RTVItem? TargetRTV;
 
     private BlendState BlendS = null!;
 
@@ -67,7 +68,7 @@ public class RendererService(Configuration config, IServiceContext services) : B
     private VertexShader AvgVS = null!;
     private PixelShader AvgPS = null!;
 
-    private readonly Dictionary<string, Renderer> Renderers = [];
+    public Dictionary<string, Renderer> Renderers { get; private set; } = [];
 
     public override async Task Initialize() {
         if(DXService.D3D11Device == null) return;
@@ -715,6 +716,7 @@ public class RendererService(Configuration config, IServiceContext services) : B
                     if(!BrowserService.Tabs.TryGetValue(r.PixId, out var t)) continue;
                     if(t.SRV == null) continue;
                     if(DrawRenderer(ctx, r, t.SRV, camView, camProj)) { // prevViewport
+                        PixInputService.HandleRendererMouseInput(r, t);
                         var screenAvg = ComputeLight(ctx, r, t.SRV);
                         LightService.UpdateById(r.PixId, screenAvg);
                     }

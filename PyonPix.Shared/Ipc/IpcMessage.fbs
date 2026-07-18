@@ -103,6 +103,27 @@ table FavIconChanged {
 	data: [ubyte];
 }
 
+table WebMessageReceived {
+	pixId: string;
+	json: string;
+}
+
+enum MediaStateAction : byte{
+	Play,
+	Pause
+}
+table UpdateMediaState {
+	pixId: string;
+	action: MediaStateAction;
+	isPlaying: bool;
+	seekTime: long;
+	duration: long;
+	timestamp: long;
+}
+table ToggleTheatreMode {
+	pixId: string;
+}
+
 enum ExtensionOp : byte {
 	Install,
 	Remove,
@@ -193,6 +214,9 @@ union MessagePayload {
 	NavigationCompleted,
 	NavigationCanceled,
 	FavIconChanged,
+	WebMessageReceived,
+	UpdateMediaState,
+	ToggleTheatreMode,
 	ExtensionOperation,
 	Navigate,
 	Reload,

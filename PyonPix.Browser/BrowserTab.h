@@ -71,6 +71,9 @@ public:
     const wchar_t* GetTabId() const { return TabId.c_str(); }
     DWORD GetBrowserProcessId() const { return BrowserProcessId; }
 
+    void UpdateMediaState(uint32_t action, bool isPlaying, int64_t seekTime, int64_t duration, int64_t timestamp);
+    void ToggleTheatreMode();
+
 private:
     std::wstring TabId;
     BrowserHost* Host;
@@ -118,8 +121,8 @@ private:
     EventRegistrationToken WebViewDocumentTitleChangedEventToken {};
     EventRegistrationToken WebViewCursorChangedEventToken {};
     EventRegistrationToken WebViewPermissionRequestedEventToken {};
-    EventRegistrationToken WebViewWebMessageReceivedEventToken {};
     EventRegistrationToken WebViewFaviconChangedEventToken {};
+    EventRegistrationToken WebViewWebMessageReceivedEventToken {};
     //EventRegistrationToken WebViewFrameCreatedEventToken {};
 
     bool CreateController(int32_t x, int32_t y, uint32_t w, uint32_t h);
@@ -127,6 +130,8 @@ private:
     bool CreateSharedTexture(uint32_t width, uint32_t height);
     void ReleaseSharedTexture();
     void OnFrameArrived(winrt::Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const& args);
+
+    void InjectMediaStateScript();
 
     std::wstring NavigatedURI;
     WebErrorInfo GetWebErrorInfoFromStatus(COREWEBVIEW2_WEB_ERROR_STATUS status, BOOL isSuccess);
@@ -137,6 +142,8 @@ private:
 
     std::wstring GetUnpackedExtensionRootPath() const { return Browser.PluginPath + L"\\Data\\Extensions"; }
     std::wstring GetUnpackedExtensionPath(const std::wstring& id) const { return GetUnpackedExtensionRootPath() + L"\\" + id; }
+
+    std::wstring EscapeJson(const std::wstring& value);
 
     BrowserTab(const BrowserTab&) = delete;
     BrowserTab& operator=(const BrowserTab&) = delete;
